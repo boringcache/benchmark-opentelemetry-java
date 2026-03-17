@@ -1,0 +1,37 @@
+name: "OpenTelemetry Java Gradle - BoringCache"
+
+on:
+  workflow_dispatch:
+    inputs:
+      cli_ref:
+        description: "Optional boringcache/cli ref to build and use instead of the released CLI"
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - ".gitmodules"
+      - ".github/workflows/opentelemetry-java-gradle-boringcache.yml"
+      - ".github/workflows/opentelemetry-java-gradle-actions-cache.yml"
+      - ".github/workflows/reusable-gradle-benchmark.yml"
+      - "README.md"
+      - "scenarios/**"
+      - "scripts/**"
+      - "upstream"
+  schedule:
+    - cron: "0 2 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  benchmark:
+    uses: ./.github/workflows/reusable-gradle-benchmark.yml
+    with:
+      benchmark_id: otel-gradle
+      project_repo: open-telemetry/opentelemetry-java
+      project_ref: f08b49ccbfd0823fa2b6662030d899684d144f4a
+      strategy: boringcache
+      java_version: "21"
+      build_command: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false
+    secrets: inherit

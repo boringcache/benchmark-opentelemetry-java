@@ -1,0 +1,12 @@
+diff --git a/exporters/common/compile-stub/src/main/java/sun/misc/Unsafe.java b/exporters/common/compile-stub/src/main/java/sun/misc/Unsafe.java
+index 48b37ad37..6fc8f8ab9 100644
+--- a/exporters/common/compile-stub/src/main/java/sun/misc/Unsafe.java
++++ b/exporters/common/compile-stub/src/main/java/sun/misc/Unsafe.java
+@@ -12,6 +12,7 @@ import java.lang.reflect.Field;
+  * that we can compile against.
+  */
+ public class Unsafe {
++  // benchmark stale mutation low
+ 
+   public long objectFieldOffset(Field f) {
+     return -1;
