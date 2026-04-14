@@ -33,5 +33,6 @@ jobs:
       project_ref: f08b49ccbfd0823fa2b6662030d899684d144f4a
       strategy: boringcache
       java_version: "21"
-      build_command: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false
+      # Pin japicmp baseline so the pinned source stays benchmarkable after newer releases land.
+      build_command: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false -PapiBaseVersion=1.59.0
     secrets: inherit
