@@ -50,7 +50,7 @@ env:
 
 jobs:
   seed-cache:
-    name: Gradle Seed (${{ inputs.strategy }}, cold)
+    name: ${{ format('Gradle Seed ({0}, {1})', inputs.strategy == 'actions-cache' && 'actions/cache' || 'BoringCache', inputs.cache_lane == 'rolling' && 'rolling' || 'fresh') }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -245,7 +245,7 @@ jobs:
           restore-keys: |
             ${{ steps.scope.outputs.cache_key_prefix }}-
 
-      - name: Run cold + seed cache build
+      - name: ${{ inputs.cache_lane == 'rolling' && 'Run rolling seed build' || 'Run fresh seed build' }}
         id: cold_baseline_build
         env:
           GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-user-home
