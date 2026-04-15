@@ -2,6 +2,12 @@ name: "OpenTelemetry Java Gradle - Actions Cache"
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".gitmodules"
+      - "upstream"
   pull_request:
     paths:
       - ".gitmodules"
@@ -25,7 +31,6 @@ jobs:
     with:
       benchmark_id: otel-gradle
       project_repo: open-telemetry/opentelemetry-java
-      project_ref: f08b49ccbfd0823fa2b6662030d899684d144f4a
       strategy: actions-cache
       java_version: "21"
       # Pin japicmp baseline so the pinned source stays benchmarkable after newer releases land.
