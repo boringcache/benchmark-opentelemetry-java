@@ -165,6 +165,10 @@ jobs:
           SH
           chmod +x ./run-gradle-phase.sh
 
+      - name: Start seed timing
+        id: seed_timing_start
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Configure boringcache/one
         if: inputs.strategy == 'boringcache'
         id: boringcache_one
@@ -259,11 +263,13 @@ jobs:
             mkdir -p "$GRADLE_USER_HOME"
           fi
 
+          phase_start="${{ steps.seed_timing_start.outputs.started_at }}"
           start="$(date +%s)"
           ./run-gradle-phase.sh seed
           rm -rf "$GRADLE_USER_HOME/daemon" "$GRADLE_USER_HOME/notifications"
           end="$(date +%s)"
-          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
 
       - name: Strip local Gradle build-cache directories before post-save
         if: inputs.strategy == 'boringcache'
@@ -429,6 +435,10 @@ jobs:
           SH
           chmod +x ./run-gradle-phase.sh
 
+      - name: Start scenario timing
+        id: scenario_timing_start
+        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Configure boringcache/one
         if: inputs.strategy == 'boringcache'
         uses: boringcache/one@v1
@@ -466,10 +476,12 @@ jobs:
           STALE_LEVEL: ${{ contains(matrix.phase, 'stale') && (endsWith(matrix.phase, '-low') && 'low' || endsWith(matrix.phase, '-high') && 'high' || 'mid') || '' }}
         run: |
           set -euo pipefail
+          phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
           start="$(date +%s)"
           ./run-gradle-phase.sh ${{ contains(matrix.phase, 'stale') && 'stale' || 'warm' }}
           end="$(date +%s)"
-          echo "seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
+          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
 
       - name: Persist scenario timing artifact
         run: |
@@ -478,6 +490,7 @@ jobs:
           cat > "benchmark-phase/${{ matrix.phase }}.env" <<EOF
           phase=${{ matrix.phase }}
           seconds=${{ steps.phase_build.outputs.seconds }}
+          build_seconds=${{ steps.phase_build.outputs.build_seconds }}
           EOF
 
       - name: Upload scenario timing artifact
