@@ -1,0 +1,21 @@
+workspace = "boringcache/benchmarks"
+
+# Archive entry that complements the gradle HTTP build-cache proxy.
+# The Gradle user home lives under the workspace (see workflow), so the
+# default_path here resolves relative to this file's directory (repo root)
+# to the same location. The action's `cache-tag` input prefixes the entry
+# tag at resolution.
+#
+# Note: this benchmark intentionally archives a sanitized Gradle user
+# home, with the local task build-cache stripped before save. The
+# strip step lives in the workflow (not in the CLI plan); see
+# performance-learning-log.md for context. Removing the strip is a
+# separate product decision, parallel to the gRPC BAZEL_OUTPUT_USER_ROOT
+# pivot, and is out of scope for this drift-cleanup pass.
+
+[entries.gradle-home]
+tag = "gradle-home"
+default_path = ".gradle-user-home"
+
+[profiles.benchmark]
+entries = ["gradle-home"]
