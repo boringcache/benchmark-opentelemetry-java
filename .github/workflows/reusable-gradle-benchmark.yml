@@ -256,15 +256,6 @@ jobs:
           echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
           echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
 
-      - name: Strip local Gradle build-cache directories before post-save
-        if: inputs.strategy == 'boringcache'
-        env:
-          GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-user-home
-        run: |
-          set -euo pipefail
-          find "$GRADLE_USER_HOME/caches" -maxdepth 1 -mindepth 1 -type d -name 'build-cache-*' -exec rm -rf {} + 2>/dev/null || true
-          rm -rf "$GRADLE_USER_HOME/build-scan-data" 2>/dev/null || true
-
       - name: Save seeded cache (primary key)
         if: inputs.strategy == 'actions-cache'
         id: save_seed_primary
@@ -583,7 +574,7 @@ jobs:
             --warm1-seconds "${{ inputs.cache_lane == 'rolling' && '' || steps.timings.outputs.warm1_seconds }}" \
             --cache-storage-bytes "${{ inputs.strategy == 'boringcache' && steps.bc_cache_size.outputs.bytes || steps.ac_cache_size.outputs.bytes }}" \
             --cache-storage-source "${{ inputs.strategy == 'boringcache' && 'boringcache-check' || 'github-actions-cache-api' }}" \
-            --hit-behavior-note "${{ inputs.cache_lane == 'rolling' && 'Rolling lane: this run executes only the upstream-sync seed build; warm1 follow-up runs are intentionally skipped.' || (inputs.strategy == 'boringcache' && 'Fresh lane: cold+seed run uses boringcache/one in mode=gradle to write an empty run-scoped Gradle HTTP remote cache and archive a sanitized Gradle user home (local build-cache directories stripped) via the benchmark profile in .boringcache.toml. Warm1 restores that archived Gradle user home on a fresh runner and rebuilds the same pinned source tree against the seeded remote cache in read-only mode.' || 'Fresh lane: cold+seed run builds from scratch with Gradle local build cache enabled and saves the entire Gradle user home, including local build-cache state, to actions/cache under a run-scoped key. Warm1 restores that same Gradle user home on a fresh runner and rebuilds the same pinned source tree without synthetic mutations.') }}"
+            --hit-behavior-note "${{ inputs.cache_lane == 'rolling' && 'Rolling lane: this run executes only the upstream-sync seed build; warm1 follow-up runs are intentionally skipped.' || (inputs.strategy == 'boringcache' && 'Fresh lane: cold+seed run uses boringcache/one in mode=gradle to write an empty run-scoped Gradle HTTP remote cache and archive the full Gradle user home including local build-cache state via the benchmark profile in .boringcache.toml. Warm1 restores that archived Gradle user home on a fresh runner and rebuilds the same pinned source tree against the seeded remote cache in read-only mode.' || 'Fresh lane: cold+seed run builds from scratch with Gradle local build cache enabled and saves the entire Gradle user home, including local build-cache state, to actions/cache under a run-scoped key. Warm1 restores that same Gradle user home on a fresh runner and rebuilds the same pinned source tree without synthetic mutations.') }}"
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v6
