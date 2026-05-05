@@ -6,12 +6,10 @@ workspace = "boringcache/benchmarks"
 # to the same location. The action's `cache-tag` input prefixes the entry
 # tag at resolution.
 #
-# Note: this benchmark intentionally archives a sanitized Gradle user
-# home, with the local task build-cache stripped before save. The
-# strip step lives in the workflow (not in the CLI plan); see
-# performance-learning-log.md for context. Removing the strip is a
-# separate product decision, parallel to the gRPC BAZEL_OUTPUT_USER_ROOT
-# pivot, and is out of scope for this drift-cleanup pass.
+# This benchmark archives the full Gradle user home for parity with the
+# actions/cache baseline, including local build-cache state. Gradle's HTTP
+# remote cache still runs through BoringCache; the archive keeps the local
+# warm-cache surface comparable on fresh runners.
 
 [entries.gradle-home]
 tag = "gradle-home"
