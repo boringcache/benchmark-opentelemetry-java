@@ -268,7 +268,9 @@ jobs:
           start="$(date +%s)"
           ./run-gradle-phase.sh seed
           rm -rf "$GRADLE_USER_HOME/daemon" "$GRADLE_USER_HOME/notifications"
-          find "$GRADLE_USER_HOME/caches" -maxdepth 1 -mindepth 1 -type d -name 'build-cache-*' -exec rm -rf {} + 2>/dev/null || true
+          if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
+            find "$GRADLE_USER_HOME/caches" -maxdepth 1 -mindepth 1 -type d -name 'build-cache-*' -exec rm -rf {} + 2>/dev/null || true
+          fi
           end="$(date +%s)"
           echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
           echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
