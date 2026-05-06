@@ -1,18 +1,18 @@
 workspace = "boringcache/benchmarks"
 
-# Archive entry that complements the gradle HTTP build-cache proxy.
+# Archive entry that complements the Gradle HTTP build-cache proxy.
 # The Gradle user home lives under the workspace (see workflow), so the
 # default_path here resolves relative to this file's directory (repo root)
 # to the same location. The action's `cache-tag` input prefixes the entry
 # tag at resolution.
 #
-# This benchmark archives the full Gradle user home for parity with the
-# actions/cache baseline, including local build-cache state. Gradle's HTTP
-# remote cache still runs through BoringCache; the archive keeps the local
-# warm-cache surface comparable on fresh runners.
+# Gradle's remote HTTP build cache is the measured build-output surface.
+# The workflow strips local Gradle build-cache directories before the
+# archive save, so this entry carries dependency/tooling state without
+# duplicating the remote build cache.
 
 [entries.gradle-home]
-tag = "gradle-home"
+tag = "gradle-deps-home-v2"
 default_path = ".gradle-user-home"
 
 [profiles.benchmark]
