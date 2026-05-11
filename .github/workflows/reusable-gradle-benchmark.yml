@@ -293,6 +293,23 @@ jobs:
           echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
           echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
 
+      - name: Freeze Gradle home for actions/cache save
+        if: inputs.strategy == 'actions-cache'
+        env:
+          GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-user-home
+        run: |
+          set -euo pipefail
+
+          (cd upstream && ./gradlew --stop >/dev/null 2>&1 || true)
+          rm -rf "$GRADLE_USER_HOME/daemon" "$GRADLE_USER_HOME/notifications"
+
+          snapshot="${GRADLE_USER_HOME}.snapshot"
+          rm -rf "$snapshot"
+          mkdir -p "$snapshot"
+          rsync -a --delete "$GRADLE_USER_HOME"/ "$snapshot"/
+          rm -rf "$GRADLE_USER_HOME"
+          mv "$snapshot" "$GRADLE_USER_HOME"
+
       - name: Save seeded cache (primary key)
         if: inputs.strategy == 'actions-cache'
         id: save_seed_primary
