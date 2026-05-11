@@ -1,4 +1,4 @@
-workspace = "boringcache/benchmarks"
+workspace = "boringcache/benchmark-opentelemetry-java"
 
 # Archive entry that complements the Gradle HTTP build-cache proxy.
 # The Gradle user home lives under the workspace (see workflow), so the
