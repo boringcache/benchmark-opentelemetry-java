@@ -301,12 +301,12 @@ jobs:
           set -euo pipefail
 
           (cd upstream && ./gradlew --stop >/dev/null 2>&1 || true)
-          rm -rf "$GRADLE_USER_HOME/daemon" "$GRADLE_USER_HOME/notifications"
+          rm -rf "$GRADLE_USER_HOME/daemon" "$GRADLE_USER_HOME/notifications" "$GRADLE_USER_HOME/build-scan-data"
 
           snapshot="${GRADLE_USER_HOME}.snapshot"
           rm -rf "$snapshot"
           mkdir -p "$snapshot"
-          rsync -a --delete "$GRADLE_USER_HOME"/ "$snapshot"/
+          rsync -a --delete --exclude 'build-scan-data/' "$GRADLE_USER_HOME"/ "$snapshot"/
           rm -rf "$GRADLE_USER_HOME"
           mv "$snapshot" "$GRADLE_USER_HOME"
 
