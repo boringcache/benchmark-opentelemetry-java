@@ -543,7 +543,7 @@ jobs:
         env:
           GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-user-home
           GRADLE_PHASE_LOG: ${{ github.workspace }}/benchmark-phase/warm1-gradle.log
-          GRADLE_EXECUTED_WARN_THRESHOLD: ${{ inputs.strategy == 'boringcache' && '100' || '' }}
+          GRADLE_EXECUTED_WARN_THRESHOLD: 100
           USE_REMOTE_CACHE: ${{ inputs.strategy == 'boringcache' && '1' || '0' }}
         run: |
           set -euo pipefail
@@ -558,7 +558,7 @@ jobs:
       - name: Parse Gradle warm task outcome
         id: gradle_outcome
         env:
-          GRADLE_EXECUTED_WARN_THRESHOLD: ${{ inputs.strategy == 'boringcache' && '100' || '' }}
+          GRADLE_EXECUTED_WARN_THRESHOLD: 100
           GRADLE_EXECUTED_FAIL_THRESHOLD: ${{ vars.GRADLE_WARM_EXECUTED_FAIL_THRESHOLD || '' }}
         run: bash ./scripts/parse-gradle-task-outcome.sh benchmark-phase/warm1-gradle.log warm1
 
