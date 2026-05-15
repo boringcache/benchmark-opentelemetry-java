@@ -40,6 +40,10 @@ on:
         required: false
         type: string
         default: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false
+      gradle_local_build_cache_policy:
+        required: false
+        type: string
+        default: default
 
 env:
   PROJECT_REPO: ${{ inputs.project_repo }}
@@ -51,6 +55,7 @@ env:
   BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES: ${{ inputs.oci_stream_through_min_bytes }}
   JAVA_VERSION: ${{ inputs.java_version }}
   BUILD_COMMAND: ${{ inputs.build_command }}
+  GRADLE_LOCAL_BUILD_CACHE_POLICY: ${{ inputs.gradle_local_build_cache_policy }}
   PROXY_PORT: "5000"
 
 jobs:
@@ -68,6 +73,12 @@ jobs:
       seed_cache_key: ${{ steps.seed_cache_key.outputs.key }}
       cache_key_prefix: ${{ steps.scope.outputs.cache_key_prefix }}
       cache_import_status: ${{ steps.cache_import_status.outputs.status }}
+      gradle_actionable_tasks: ${{ steps.gradle_outcome.outputs.actionable_tasks }}
+      gradle_executed_tasks: ${{ steps.gradle_outcome.outputs.executed_tasks }}
+      gradle_from_cache_tasks: ${{ steps.gradle_outcome.outputs.from_cache_tasks }}
+      gradle_up_to_date_tasks: ${{ steps.gradle_outcome.outputs.up_to_date_tasks }}
+      gradle_outcome_summary: ${{ steps.gradle_outcome.outputs.summary }}
+      gradle_outcome_warning: ${{ steps.gradle_outcome.outputs.warning }}
     steps:
       - name: Validate BoringCache secrets
         if: inputs.strategy == 'boringcache'
@@ -164,7 +175,12 @@ jobs:
           fi
 
           cd upstream
-          eval "$BUILD_COMMAND"
+          if [[ -n "${GRADLE_PHASE_LOG:-}" ]]; then
+            mkdir -p "$(dirname "$GRADLE_PHASE_LOG")"
+            eval "$BUILD_COMMAND" 2>&1 | tee "$GRADLE_PHASE_LOG"
+          else
+            eval "$BUILD_COMMAND"
+          fi
           SH
           chmod +x ./run-gradle-phase.sh
 
@@ -272,9 +288,11 @@ jobs:
         id: cold_baseline_build
         env:
           GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-user-home
+          GRADLE_PHASE_LOG: ${{ github.workspace }}/benchmark-phase/seed-gradle.log
           USE_REMOTE_CACHE: ${{ inputs.strategy == 'boringcache' && '1' || '0' }}
         run: |
           set -euo pipefail
+          mkdir -p benchmark-phase
           if [[ "${{ inputs.strategy }}" == "actions-cache" && "$CACHE_LANE" != "rolling" ]]; then
             rm -rf "$GRADLE_USER_HOME"
             mkdir -p "$GRADLE_USER_HOME"
@@ -286,12 +304,26 @@ jobs:
           start="$(date +%s)"
           ./run-gradle-phase.sh seed
           rm -rf "$GRADLE_USER_HOME/daemon" "$GRADLE_USER_HOME/notifications"
+          strip_local_build_cache=0
           if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
+            if [[ "$GRADLE_LOCAL_BUILD_CACHE_POLICY" != "preserve" ]]; then
+              strip_local_build_cache=1
+            fi
+          elif [[ "${{ inputs.strategy }}" == "actions-cache" && "$GRADLE_LOCAL_BUILD_CACHE_POLICY" == "strip" ]]; then
+            strip_local_build_cache=1
+          fi
+          if [[ "$strip_local_build_cache" == "1" ]]; then
             find "$GRADLE_USER_HOME/caches" -maxdepth 1 -mindepth 1 -type d -name 'build-cache-*' -exec rm -rf {} + 2>/dev/null || true
           fi
           end="$(date +%s)"
           echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
           echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+
+      - name: Parse Gradle seed task outcome
+        id: gradle_outcome
+        env:
+          GRADLE_PHASE: ${{ inputs.cache_lane == 'rolling' && 'commit' || 'cold' }}
+        run: bash ./scripts/parse-gradle-task-outcome.sh benchmark-phase/seed-gradle.log "$GRADLE_PHASE"
 
       - name: Freeze Gradle home for actions/cache save
         if: inputs.strategy == 'actions-cache'
@@ -454,7 +486,12 @@ jobs:
           fi
 
           cd upstream
-          eval "$BUILD_COMMAND"
+          if [[ -n "${GRADLE_PHASE_LOG:-}" ]]; then
+            mkdir -p "$(dirname "$GRADLE_PHASE_LOG")"
+            eval "$BUILD_COMMAND" 2>&1 | tee "$GRADLE_PHASE_LOG"
+          else
+            eval "$BUILD_COMMAND"
+          fi
           SH
           chmod +x ./run-gradle-phase.sh
 
@@ -505,15 +542,25 @@ jobs:
         id: phase_build
         env:
           GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-user-home
+          GRADLE_PHASE_LOG: ${{ github.workspace }}/benchmark-phase/warm1-gradle.log
+          GRADLE_EXECUTED_WARN_THRESHOLD: ${{ inputs.strategy == 'boringcache' && '100' || '' }}
           USE_REMOTE_CACHE: ${{ inputs.strategy == 'boringcache' && '1' || '0' }}
         run: |
           set -euo pipefail
+          mkdir -p benchmark-phase
           phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
           start="$(date +%s)"
           ./run-gradle-phase.sh warm
           end="$(date +%s)"
           echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
           echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
+
+      - name: Parse Gradle warm task outcome
+        id: gradle_outcome
+        env:
+          GRADLE_EXECUTED_WARN_THRESHOLD: ${{ inputs.strategy == 'boringcache' && '100' || '' }}
+          GRADLE_EXECUTED_FAIL_THRESHOLD: ${{ vars.GRADLE_WARM_EXECUTED_FAIL_THRESHOLD || '' }}
+        run: bash ./scripts/parse-gradle-task-outcome.sh benchmark-phase/warm1-gradle.log warm1
 
       - name: Persist scenario timing artifact
         run: |
@@ -523,6 +570,12 @@ jobs:
           phase=warm1
           seconds=${{ steps.phase_build.outputs.seconds }}
           build_seconds=${{ steps.phase_build.outputs.build_seconds }}
+          gradle_actionable_tasks=${{ steps.gradle_outcome.outputs.actionable_tasks }}
+          gradle_executed_tasks=${{ steps.gradle_outcome.outputs.executed_tasks }}
+          gradle_from_cache_tasks=${{ steps.gradle_outcome.outputs.from_cache_tasks }}
+          gradle_up_to_date_tasks=${{ steps.gradle_outcome.outputs.up_to_date_tasks }}
+          gradle_outcome_summary=${{ steps.gradle_outcome.outputs.summary }}
+          gradle_outcome_warning=${{ steps.gradle_outcome.outputs.warning }}
           EOF
 
       - name: Upload scenario timing artifact
@@ -590,6 +643,12 @@ jobs:
             if [[ -n "${build_seconds}" ]]; then
               echo "${key}_build_seconds=${build_seconds}" >> "$GITHUB_OUTPUT"
             fi
+            for field in gradle_actionable_tasks gradle_executed_tasks gradle_from_cache_tasks gradle_up_to_date_tasks gradle_outcome_summary gradle_outcome_warning; do
+              value="$(grep "^${field}=" "$file" | head -n1 | cut -d= -f2- || true)"
+              if [[ -n "${value}" ]]; then
+                echo "${key}_${field}=${value}" >> "$GITHUB_OUTPUT"
+              fi
+            done
           }
           parse_phase warm1
 
@@ -600,8 +659,11 @@ jobs:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
         run: |
           tags_csv="${{ needs.seed-cache.outputs.tags_csv }}"
-          bytes="$(./scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
+          mkdir -p benchmark-storage
+          breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
+          bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" ./scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
           echo "bytes=${bytes}" >> "$GITHUB_OUTPUT"
+          echo "breakdown_path=${breakdown_path}" >> "$GITHUB_OUTPUT"
 
       - name: Measure GHA cache storage usage
         if: inputs.strategy == 'actions-cache'
@@ -620,6 +682,74 @@ jobs:
         id: upstream_ref
         run: echo "sha=$(git rev-parse HEAD:upstream)" >> "$GITHUB_OUTPUT"
 
+      - name: Write tool outcome diagnostics
+        id: tool_outcomes
+        env:
+          SEED_PHASE: ${{ inputs.cache_lane == 'rolling' && 'commit' || 'cold' }}
+          LOCAL_BUILD_CACHE_POLICY: ${{ inputs.gradle_local_build_cache_policy }}
+          SEED_ACTIONABLE_TASKS: ${{ needs.seed-cache.outputs.gradle_actionable_tasks }}
+          SEED_EXECUTED_TASKS: ${{ needs.seed-cache.outputs.gradle_executed_tasks }}
+          SEED_FROM_CACHE_TASKS: ${{ needs.seed-cache.outputs.gradle_from_cache_tasks }}
+          SEED_UP_TO_DATE_TASKS: ${{ needs.seed-cache.outputs.gradle_up_to_date_tasks }}
+          SEED_OUTCOME_SUMMARY: ${{ needs.seed-cache.outputs.gradle_outcome_summary }}
+          SEED_OUTCOME_WARNING: ${{ needs.seed-cache.outputs.gradle_outcome_warning }}
+          WARM_ACTIONABLE_TASKS: ${{ steps.timings.outputs.warm1_gradle_actionable_tasks }}
+          WARM_EXECUTED_TASKS: ${{ steps.timings.outputs.warm1_gradle_executed_tasks }}
+          WARM_FROM_CACHE_TASKS: ${{ steps.timings.outputs.warm1_gradle_from_cache_tasks }}
+          WARM_UP_TO_DATE_TASKS: ${{ steps.timings.outputs.warm1_gradle_up_to_date_tasks }}
+          WARM_OUTCOME_SUMMARY: ${{ steps.timings.outputs.warm1_gradle_outcome_summary }}
+          WARM_OUTCOME_WARNING: ${{ steps.timings.outputs.warm1_gradle_outcome_warning }}
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+
+          num_or_null() {
+            if [[ "$1" =~ ^[0-9]+$ ]]; then
+              printf '%s' "$1"
+            else
+              printf 'null'
+            fi
+          }
+
+          json_string_or_null() {
+            if [[ -z "$1" ]]; then
+              printf 'null'
+            else
+              jq -Rn --arg value "$1" '$value'
+            fi
+          }
+
+          warnings_json="$(
+            printf '%s\n%s\n' "$SEED_OUTCOME_WARNING" "$WARM_OUTCOME_WARNING" |
+              jq -R -s 'split("\n") | map(select(length > 0)) | unique'
+          )"
+
+          cat > benchmark-results/tool-outcomes.json <<JSON
+          {
+            "gradle": {
+              "local_build_cache_policy": $(json_string_or_null "$LOCAL_BUILD_CACHE_POLICY"),
+              "${SEED_PHASE}": {
+                "summary": $(json_string_or_null "$SEED_OUTCOME_SUMMARY"),
+                "actionable_tasks": $(num_or_null "$SEED_ACTIONABLE_TASKS"),
+                "executed_tasks": $(num_or_null "$SEED_EXECUTED_TASKS"),
+                "from_cache_tasks": $(num_or_null "$SEED_FROM_CACHE_TASKS"),
+                "up_to_date_tasks": $(num_or_null "$SEED_UP_TO_DATE_TASKS")
+              },
+              "warm1": {
+                "summary": $(json_string_or_null "$WARM_OUTCOME_SUMMARY"),
+                "actionable_tasks": $(num_or_null "$WARM_ACTIONABLE_TASKS"),
+                "executed_tasks": $(num_or_null "$WARM_EXECUTED_TASKS"),
+                "from_cache_tasks": $(num_or_null "$WARM_FROM_CACHE_TASKS"),
+                "up_to_date_tasks": $(num_or_null "$WARM_UP_TO_DATE_TASKS")
+              }
+            },
+            "warnings": ${warnings_json}
+          }
+          JSON
+
+          jq -c '.' benchmark-results/tool-outcomes.json >/dev/null
+          echo "path=benchmark-results/tool-outcomes.json" >> "$GITHUB_OUTPUT"
+
       - name: Write benchmark artifacts
         id: artifact_files
         run: |
@@ -635,8 +765,10 @@ jobs:
             --warm1-build-seconds "${{ inputs.cache_lane == 'rolling' && '' || steps.timings.outputs.warm1_build_seconds }}" \
             --cache-storage-bytes "${{ inputs.strategy == 'boringcache' && steps.bc_cache_size.outputs.bytes || steps.ac_cache_size.outputs.bytes }}" \
             --cache-storage-source "${{ inputs.strategy == 'boringcache' && 'boringcache-check' || 'github-actions-cache-api' }}" \
+            --storage-breakdown-json "${{ inputs.strategy == 'boringcache' && steps.bc_cache_size.outputs.breakdown_path || '' }}" \
+            --tool-outcomes-json "${{ steps.tool_outcomes.outputs.path }}" \
             --cache-import-status "${{ needs.seed-cache.outputs.cache_import_status }}" \
-            --hit-behavior-note "${{ inputs.cache_lane == 'rolling' && 'Rolling lane: this run builds the current upstream commit as-is with the prior rolling cache available, exports the updated cache, and records that commit build only; warm1 follow-up runs are intentionally skipped.' || (inputs.strategy == 'boringcache' && 'Fresh lane: the cold build uses boringcache/one in mode=gradle to write an empty run-scoped Gradle HTTP remote build cache and archive the Gradle user home after stripping local build-cache directories. Warm1 restores dependency/tooling state on a fresh runner and rebuilds the same pinned source tree against the remote cache populated by the cold build in read-only mode.' || 'Fresh lane: the cold build runs from scratch with Gradle local build cache enabled and saves the entire Gradle user home, including local build-cache state, to actions/cache under a run-scoped key. Warm1 restores that same local Gradle user home on a fresh runner and rebuilds the same pinned source tree without synthetic mutations.') }}"
+            --hit-behavior-note "${{ inputs.cache_lane == 'rolling' && 'Rolling lane: this run builds the current upstream commit as-is with the prior rolling cache available, exports the updated cache, and records that commit build only; warm1 follow-up runs are intentionally skipped.' || (inputs.strategy == 'boringcache' && 'Fresh lane: the cold build uses boringcache/one in mode=gradle to write an empty run-scoped Gradle HTTP remote build cache. Warm1 restores dependency/tooling state on a fresh runner and rebuilds the same pinned source tree against the remote cache populated by the cold build in read-only mode. Gradle local build-cache policy is recorded in tool_outcomes.' || 'Fresh lane: the cold build runs from scratch with Gradle local build cache enabled and saves the Gradle user home to actions/cache under a run-scoped key. Warm1 restores that Gradle user home on a fresh runner and rebuilds the same pinned source tree without synthetic mutations. Gradle local build-cache policy is recorded in tool_outcomes.') }}"
 
       - name: Upload benchmark artifacts
         uses: actions/upload-artifact@v6

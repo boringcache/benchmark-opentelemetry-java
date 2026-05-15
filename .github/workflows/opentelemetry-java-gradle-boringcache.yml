@@ -25,6 +25,14 @@ on:
         description: "Optional BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES (Docker/OCI only; blank = disabled)"
         required: false
         type: string
+      gradle_local_build_cache_policy:
+        description: "Diagnostic local Gradle build-cache policy"
+        required: false
+        type: choice
+        default: default
+        options:
+          - default
+          - preserve
   push:
     branches:
       - main
@@ -57,6 +65,7 @@ jobs:
       blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
       blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
       oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
+      gradle_local_build_cache_policy: ${{ github.event_name == 'workflow_dispatch' && inputs.gradle_local_build_cache_policy || 'default' }}
       java_version: "21"
       # Pin japicmp baseline so the pinned source stays benchmarkable after newer releases land.
       build_command: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false -PapiBaseVersion=1.59.0
