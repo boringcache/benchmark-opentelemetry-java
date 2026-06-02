@@ -348,8 +348,8 @@ jobs:
           path: benchmark-session-summary/benchmark-session-summary.json
           if-no-files-found: ignore
 
-      - name: Freeze Gradle home for actions/cache save
-        if: inputs.strategy == 'actions-cache'
+      - name: Freeze Gradle home for cache save
+        if: inputs.strategy == 'actions-cache' || inputs.strategy == 'boringcache'
         env:
           GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-user-home
         run: |
@@ -361,7 +361,13 @@ jobs:
           snapshot="${GRADLE_USER_HOME}.snapshot"
           rm -rf "$snapshot"
           mkdir -p "$snapshot"
-          rsync -a --delete --exclude 'build-scan-data/' "$GRADLE_USER_HOME"/ "$snapshot"/
+          rsync_status=0
+          rsync -a --delete --exclude 'build-scan-data/' "$GRADLE_USER_HOME"/ "$snapshot"/ || rsync_status=$?
+          if [[ "$rsync_status" == "24" ]]; then
+            echo "Gradle cache files changed during snapshot; continuing with the stable files rsync copied."
+          elif [[ "$rsync_status" != "0" ]]; then
+            exit "$rsync_status"
+          fi
           rm -rf "$GRADLE_USER_HOME"
           mv "$snapshot" "$GRADLE_USER_HOME"
 
