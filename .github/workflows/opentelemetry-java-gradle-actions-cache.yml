@@ -21,19 +21,6 @@ on:
         options:
           - default
           - strip
-  schedule:
-    - cron: "0 3 * * 4"
-  pull_request:
-    paths:
-      - ".gitmodules"
-      - ".github/workflows/opentelemetry-java-gradle-boringcache.yml"
-      - ".github/workflows/opentelemetry-java-gradle-actions-cache.yml"
-      - ".github/workflows/reusable-gradle-benchmark.yml"
-      - "README.md"
-      - "scenarios/**"
-      - "scripts/**"
-      - "upstream"
-
 permissions:
   contents: read
   actions: write
