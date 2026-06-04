@@ -13,18 +13,6 @@ on:
         options:
           - fresh
           - rolling
-      blob_download_concurrency:
-        description: "Optional BORINGCACHE_BLOB_DOWNLOAD_CONCURRENCY override (blank = adaptive)"
-        required: false
-        type: string
-      blob_prefetch_concurrency:
-        description: "Optional BORINGCACHE_BLOB_PREFETCH_CONCURRENCY override (blank = match download concurrency)"
-        required: false
-        type: string
-      oci_stream_through_min_bytes:
-        description: "Optional BORINGCACHE_OCI_STREAM_THROUGH_MIN_BYTES (Docker/OCI only; blank = disabled)"
-        required: false
-        type: string
       gradle_local_build_cache_policy:
         description: "Diagnostic local Gradle build-cache policy"
         required: false
@@ -46,9 +34,6 @@ jobs:
       project_repo: open-telemetry/opentelemetry-java
       strategy: boringcache
       cache_lane: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
-      blob_download_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_download_concurrency || '' }}
-      blob_prefetch_concurrency: ${{ github.event_name == 'workflow_dispatch' && inputs.blob_prefetch_concurrency || '' }}
-      oci_stream_through_min_bytes: ${{ github.event_name == 'workflow_dispatch' && inputs.oci_stream_through_min_bytes || '' }}
       gradle_local_build_cache_policy: ${{ github.event_name == 'workflow_dispatch' && inputs.gradle_local_build_cache_policy || 'default' }}
       java_version: "21"
       # Pin japicmp baseline so the pinned source stays benchmarkable after newer releases land.
