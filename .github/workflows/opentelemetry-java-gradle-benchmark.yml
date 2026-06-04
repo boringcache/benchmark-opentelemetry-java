@@ -13,22 +13,6 @@ on:
         options:
           - fresh
           - rolling
-      actions_gradle_local_build_cache_policy:
-        description: "Diagnostic local Gradle build-cache policy for GitHub Actions Cache"
-        required: false
-        type: choice
-        default: default
-        options:
-          - default
-          - strip
-      boringcache_gradle_local_build_cache_policy:
-        description: "Diagnostic local Gradle build-cache policy for BoringCache"
-        required: false
-        type: choice
-        default: default
-        options:
-          - default
-          - preserve
   schedule:
     - cron: "0 3 * * 4"
   pull_request:
@@ -54,7 +38,7 @@ jobs:
       project_repo: open-telemetry/opentelemetry-java
       strategy: actions-cache
       cache_lane: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
-      gradle_local_build_cache_policy: ${{ github.event_name == 'workflow_dispatch' && inputs.actions_gradle_local_build_cache_policy || 'default' }}
+      gradle_local_build_cache_policy: default
       java_version: "21"
       build_command: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false -PapiBaseVersion=1.59.0
     secrets: inherit
@@ -67,7 +51,7 @@ jobs:
       project_repo: open-telemetry/opentelemetry-java
       strategy: boringcache
       cache_lane: ${{ github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
-      gradle_local_build_cache_policy: ${{ github.event_name == 'workflow_dispatch' && inputs.boringcache_gradle_local_build_cache_policy || 'default' }}
+      gradle_local_build_cache_policy: default
       java_version: "21"
       build_command: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false -PapiBaseVersion=1.59.0
     secrets: inherit
