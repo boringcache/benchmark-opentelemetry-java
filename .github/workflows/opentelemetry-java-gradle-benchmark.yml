@@ -62,7 +62,7 @@ jobs:
       project_repo: open-telemetry/opentelemetry-java
       strategy: boringcache
       cache_lane: ${{ github.event_name == 'push' && 'rolling' || github.event_name == 'workflow_dispatch' && inputs.cache_lane || 'fresh' }}
-      cli_version: ${{ inputs.cli_version }}
+      cli_version: ${{ inputs.cli_version || vars.BORINGCACHE_BENCHMARK_CLI_VERSION || 'v1.13.93' }}
       gradle_local_build_cache_policy: default
       java_version: "21"
       build_command: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false -PapiBaseVersion=1.59.0
