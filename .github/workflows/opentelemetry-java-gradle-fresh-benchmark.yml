@@ -1,24 +1,17 @@
-name: "OpenTelemetry Java Gradle Benchmark"
+name: "OpenTelemetry Java Gradle Fresh"
 run-name: >-
-  ${{ format('Benchmark {0} | {1}', github.event_name == 'pull_request' && 'Validation' || 'Rolling', github.event_name == 'push' && 'Upstream update' || github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('Manual dispatch ({0})', github.ref_name)) }}
+  ${{ format('Benchmark {0} | {1}', inputs.cli_version != '' && 'Canary' || 'Fresh', github.event_name == 'schedule' && 'Weekly' || format('Manual dispatch ({0})', github.ref_name)) }}
+
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - ".gitmodules"
-      - "upstream"
-  pull_request:
-    paths:
-      - ".gitmodules"
-      - ".github/workflows/opentelemetry-java-gradle-benchmark.yml"
-      - ".github/workflows/opentelemetry-java-gradle-fresh-benchmark.yml"
-      - ".github/workflows/reusable-gradle-benchmark.yml"
-      - "README.md"
-      - "scenarios/**"
-      - "scripts/**"
-      - "upstream"
+    inputs:
+      cli_version:
+        description: "Optional BoringCache CLI release tag for canary runs."
+        required: false
+        type: string
+        default: ""
+  schedule:
+    - cron: "0 3 * * 4"
 
 permissions:
   contents: read
@@ -32,7 +25,7 @@ jobs:
       benchmark_id: otel-gradle
       project_repo: open-telemetry/opentelemetry-java
       strategy: actions-cache
-      cache_lane: ${{ github.event_name == 'pull_request' && 'fresh' || 'rolling' }}
+      cache_lane: fresh
       gradle_local_build_cache_policy: default
       java_version: "21"
       build_command: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false -PapiBaseVersion=1.59.0
@@ -45,7 +38,8 @@ jobs:
       benchmark_id: otel-gradle
       project_repo: open-telemetry/opentelemetry-java
       strategy: boringcache
-      cache_lane: ${{ github.event_name == 'pull_request' && 'fresh' || 'rolling' }}
+      cache_lane: fresh
+      cli_version: ${{ inputs.cli_version }}
       gradle_local_build_cache_policy: default
       java_version: "21"
       build_command: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false -PapiBaseVersion=1.59.0
