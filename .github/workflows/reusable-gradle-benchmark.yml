@@ -193,7 +193,6 @@ jobs:
           proxy-no-git: 'true'
           proxy-no-platform: 'true'
           cache-profiles: benchmark
-          verify: wait
           verbose: true
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
@@ -535,7 +534,6 @@ jobs:
           proxy-no-platform: 'true'
           cache-profiles: benchmark
           fail-on-cache-miss: true
-          verify: check
           verbose: true
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
