@@ -1,10 +1,14 @@
 workspace = "boringcache/benchmark-opentelemetry-java"
 
+[adapters.gradle]
+tag = "otel-gradle"
+no-platform = true
+no-git = true
+
 # Archive entry that complements the Gradle HTTP build-cache proxy.
 # The Gradle user home lives under the workspace (see workflow), so the
 # default_path here resolves relative to this file's directory (repo root)
-# to the same location. The action's `cache-tag` input prefixes the entry
-# tag at resolution.
+# to the same location.
 #
 # Gradle's remote HTTP build cache is the measured build-output surface.
 # The workflow strips local Gradle build-cache directories before the
