@@ -73,8 +73,8 @@ jobs:
       - name: Validate BoringCache secrets
         if: inputs.strategy == 'boringcache'
         env:
-          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
-          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
         run: |
           set -euo pipefail
           [[ -n "${BORINGCACHE_RESTORE_TOKEN}" ]] || { echo "Missing BoringCache restore token" >&2; exit 1; }
@@ -181,24 +181,20 @@ jobs:
       - name: Configure boringcache/one
         if: inputs.strategy == 'boringcache'
         id: boringcache_one
-        uses: boringcache/one@v1
+        uses: boringcache/one@9721d419d2c78c0780963d297eb3f81f24641a27
         with:
           setup: none
           cli-version: ${{ inputs.cli_version }}
           mode: gradle
-          workspace: ${{ env.BENCHMARK_WORKSPACE }}
-          cache-tag: ${{ steps.scope.outputs.tag_remote }}
           working-directory: ./upstream
           gradle-home: ${{ github.workspace }}/.gradle-user-home
-          proxy-no-git: 'true'
-          proxy-no-platform: 'true'
           cache-profiles: benchmark
           save-on-pull-request: ${{ inputs.cache_lane == 'fresh' }}
           fail-on-cache-error: ${{ inputs.cache_lane == 'fresh' }}
           verbose: true
         env:
-          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
-          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
           BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ env.BENCHMARK_ID }}-boringcache-build-observability.jsonl
 
       - name: Purge GitHub Actions cache keys
@@ -428,7 +424,7 @@ jobs:
       - name: Validate BoringCache restore secret
         if: inputs.strategy == 'boringcache'
         env:
-          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
         run: |
           set -euo pipefail
           [[ -n "${BORINGCACHE_RESTORE_TOKEN}" ]] || { echo "Missing BoringCache restore token" >&2; exit 1; }
@@ -522,24 +518,20 @@ jobs:
 
       - name: Configure boringcache/one
         if: inputs.strategy == 'boringcache'
-        uses: boringcache/one@v1
+        uses: boringcache/one@9721d419d2c78c0780963d297eb3f81f24641a27
         with:
           setup: none
           cli-version: ${{ inputs.cli_version }}
           mode: gradle
-          workspace: ${{ env.BENCHMARK_WORKSPACE }}
-          cache-tag: ${{ steps.scope.outputs.tag_remote }}
           working-directory: ./upstream
           gradle-home: ${{ github.workspace }}/.gradle-user-home
           read-only: true
           save-on-pull-request: ${{ inputs.cache_lane == 'fresh' }}
-          proxy-no-git: 'true'
-          proxy-no-platform: 'true'
           cache-profiles: benchmark
           fail-on-cache-miss: true
           verbose: true
         env:
-          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
 
       - name: Verify dependency archive restored
         if: inputs.strategy == 'boringcache'
@@ -620,17 +612,12 @@ jobs:
           fetch-depth: 1
           submodules: false
 
-      - name: Install BoringCache CLI with boringcache/one
+      - name: Install BoringCache CLI
         if: inputs.strategy == 'boringcache'
-        uses: boringcache/one@v1
-        with:
-          setup: none
-          cli-version: ${{ inputs.cli_version }}
-          mode: archive
-          workspace: ${{ env.BENCHMARK_WORKSPACE }}
-          cli-platform: linux-amd64
-          cache-runtime: false
-
+        run: >-
+          ./scripts/install-boringcache-cli.sh
+          "${{ inputs.cli_version }}"
+          "linux-amd64"
       - name: Download scenario timing artifacts
         if: ${{ inputs.cache_lane != 'rolling' }}
         uses: actions/download-artifact@v8
@@ -687,7 +674,7 @@ jobs:
         if: inputs.strategy == 'boringcache'
         id: bc_cache_size
         env:
-          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN || secrets.BORINGCACHE_API_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
         run: |
           tags_csv="${{ needs.seed-cache.outputs.tags_csv }}"
           mkdir -p benchmark-storage
@@ -784,7 +771,7 @@ jobs:
       - name: Write benchmark artifacts
         id: artifact_files
         env:
-          BORINGCACHE_API_TOKEN: ${{ secrets.BORINGCACHE_API_TOKEN || secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
         run: |
           cache_summary_args=()
           if [[ -s benchmark-session-summary/benchmark-session-summary.json ]]; then
@@ -806,7 +793,7 @@ jobs:
             --storage-breakdown-json "${{ inputs.strategy == 'boringcache' && steps.bc_cache_size.outputs.breakdown_path || '' }}" \
             --tool-outcomes-json "${{ steps.tool_outcomes.outputs.path }}" \
             --cache-import-status "${{ needs.seed-cache.outputs.cache_import_status }}" \
-            --hit-behavior-note "${{ inputs.cache_lane == 'rolling' && 'Rolling lane: this run builds the current upstream commit as-is with the prior rolling cache available, exports the updated cache, and records that commit build only; warm follow-up runs are intentionally skipped.' || (inputs.strategy == 'boringcache' && 'Fresh lane: the cold build uses boringcache/one in mode=gradle to write an empty run-scoped Gradle HTTP remote build cache. Warm restores dependency/tooling state on a fresh runner and rebuilds the same pinned source tree against the remote cache populated by the cold build in read-only mode. Gradle local build-cache policy is recorded in tool_outcomes.' || 'Fresh lane: the cold build runs from scratch with Gradle local build cache enabled and saves the Gradle user home to actions/cache under a run-scoped key. Warm restores that Gradle user home on a fresh runner and rebuilds the same pinned source tree without synthetic mutations. Gradle local build-cache policy is recorded in tool_outcomes.') }}" \
+            --hit-behavior-note "${{ inputs.cache_lane == 'rolling' && 'Rolling lane: this run builds the current upstream commit as-is with the prior rolling cache available, exports the updated cache, and records that commit build only; warm follow-up runs are intentionally skipped.' || (inputs.strategy == 'boringcache' && 'Fresh lane: the cold build uses boringcache/one in mode=gradle with the Gradle HTTP remote cache identity from the committed repo plan. Warm restores dependency/tooling state on a fresh runner and rebuilds the same pinned source tree against the remote cache populated by the cold build in read-only mode. Gradle local build-cache policy is recorded in tool_outcomes.' || 'Fresh lane: the cold build runs from scratch with Gradle local build cache enabled and saves the Gradle user home to actions/cache under a run-scoped key. Warm restores that Gradle user home on a fresh runner and rebuilds the same pinned source tree without synthetic mutations. Gradle local build-cache policy is recorded in tool_outcomes.') }}" \
             "${cache_summary_args[@]}"
 
       - name: Upload benchmark artifacts
