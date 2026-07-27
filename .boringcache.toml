@@ -1,7 +1,7 @@
 workspace = "boringcache/benchmark-opentelemetry-java"
 
 [adapters.gradle]
-tag = "otel-gradle"
+tag = "otel-gradle-local"
 no-platform = true
 no-git = true
 
@@ -16,7 +16,7 @@ no-git = true
 # duplicating the remote build cache.
 
 [entries.gradle-home]
-tag = "gradle-deps-home-v2"
+tag = "otel-gradle-home-local"
 default_path = ".gradle-user-home"
 
 [profiles.benchmark]

@@ -124,6 +124,8 @@ jobs:
           fi
           tag_remote="${cache_scope}-gradle-remote"
 
+          ./scripts/scope-boringcache-run.sh "$cache_scope"
+
           echo "scope_started_at=${scope_started_at}" >> "$GITHUB_OUTPUT"
           echo "tag_remote=${tag_remote}" >> "$GITHUB_OUTPUT"
           echo "cache_key_prefix=${cache_key_prefix}" >> "$GITHUB_OUTPUT"
@@ -195,6 +197,7 @@ jobs:
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+          BORINGCACHE_NO_GIT: "true"
           BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ env.BENCHMARK_ID }}-boringcache-build-observability.jsonl
 
       - name: Purge GitHub Actions cache keys
@@ -313,6 +316,17 @@ jobs:
         env:
           GRADLE_PHASE: ${{ inputs.cache_lane == 'rolling' && 'commit' || 'cold' }}
         run: bash ./scripts/parse-gradle-task-outcome.sh benchmark-phase/cold-gradle.log "$GRADLE_PHASE"
+
+      - name: Verify fresh cold Gradle cache state
+        if: inputs.strategy == 'boringcache' && inputs.cache_lane == 'fresh'
+        env:
+          GRADLE_FROM_CACHE_TASKS: ${{ steps.gradle_outcome.outputs.from_cache_tasks }}
+        run: |
+          set -euo pipefail
+          if [[ "${GRADLE_FROM_CACHE_TASKS:-0}" -ne 0 ]]; then
+            echo "Fresh BoringCache cold build unexpectedly restored ${GRADLE_FROM_CACHE_TASKS} Gradle tasks" >&2
+            exit 1
+          fi
 
       - name: Capture BoringCache session summary
         if: inputs.strategy == 'boringcache' && always()
@@ -466,6 +480,8 @@ jobs:
           fi
           tag_remote="${cache_scope}-gradle-remote"
 
+          ./scripts/scope-boringcache-run.sh "$cache_scope"
+
           echo "tag_remote=${tag_remote}" >> "$GITHUB_OUTPUT"
 
           cat > ./run-gradle-phase.sh <<'SH'
@@ -531,6 +547,7 @@ jobs:
           verbose: true
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_NO_GIT: "true"
 
       - name: Verify dependency archive restored
         if: inputs.strategy == 'boringcache'
@@ -574,6 +591,16 @@ jobs:
           GRADLE_EXECUTED_WARN_THRESHOLD: 100
           GRADLE_EXECUTED_FAIL_THRESHOLD: ${{ vars.GRADLE_WARM_EXECUTED_FAIL_THRESHOLD || '' }}
         run: bash ./scripts/parse-gradle-task-outcome.sh benchmark-phase/warm1-gradle.log warm1
+
+      - name: Verify warm Gradle cache reuse
+        env:
+          GRADLE_FROM_CACHE_TASKS: ${{ steps.gradle_outcome.outputs.from_cache_tasks }}
+        run: |
+          set -euo pipefail
+          if [[ "${GRADLE_FROM_CACHE_TASKS:-0}" -lt 1 ]]; then
+            echo "Warm Gradle build produced zero native build-cache hits" >&2
+            exit 1
+          fi
 
       - name: Persist scenario timing artifact
         run: |
@@ -792,7 +819,7 @@ jobs:
             --storage-breakdown-json "${{ inputs.strategy == 'boringcache' && steps.bc_cache_size.outputs.breakdown_path || '' }}" \
             --tool-outcomes-json "${{ steps.tool_outcomes.outputs.path }}" \
             --cache-import-status "${{ needs.seed-cache.outputs.cache_import_status }}" \
-            --hit-behavior-note "${{ inputs.cache_lane == 'rolling' && 'Rolling lane: this run builds the current upstream commit as-is with the prior rolling cache available, exports the updated cache, and records that commit build only; warm follow-up runs are intentionally skipped.' || (inputs.strategy == 'boringcache' && 'Fresh lane: the cold build uses boringcache/one in mode=gradle with the Gradle HTTP remote cache identity from the committed repo plan. Warm restores dependency/tooling state on a fresh runner and rebuilds the same pinned source tree against the remote cache populated by the cold build in read-only mode. Gradle local build-cache policy is recorded in tool_outcomes.' || 'Fresh lane: the cold build runs from scratch with Gradle local build cache enabled and saves the Gradle user home to actions/cache under a run-scoped key. Warm restores that Gradle user home on a fresh runner and rebuilds the same pinned source tree without synthetic mutations. Gradle local build-cache policy is recorded in tool_outcomes.') }}" \
+            --hit-behavior-note "${{ inputs.cache_lane == 'rolling' && 'Rolling lane: this run builds the current upstream commit as-is with the prior rolling cache available, exports the updated cache, and records that commit build only; warm follow-up runs are intentionally skipped.' || (inputs.strategy == 'boringcache' && 'Fresh lane: the cold build uses boringcache/one in mode=gradle with trust-policy=publish and a run-scoped Gradle HTTP remote-cache identity from the committed repo plan. Warm uses trust-policy=restore on a fresh runner and rebuilds the same pinned source tree against the exact cache populated by the cold build. Gradle local build-cache policy is recorded in tool_outcomes.' || 'Fresh lane: the cold build runs from scratch with Gradle local build cache enabled and saves the Gradle user home to actions/cache under a run-scoped key. Warm restores that Gradle user home on a fresh runner and rebuilds the same pinned source tree without synthetic mutations. Gradle local build-cache policy is recorded in tool_outcomes.') }}" \
             "${cache_summary_args[@]}"
 
       - name: Upload benchmark artifacts
