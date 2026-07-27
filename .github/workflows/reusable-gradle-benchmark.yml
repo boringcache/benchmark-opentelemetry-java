@@ -126,11 +126,13 @@ jobs:
 
           ./scripts/scope-boringcache-run.sh "$cache_scope"
 
-          echo "scope_started_at=${scope_started_at}" >> "$GITHUB_OUTPUT"
-          echo "tag_remote=${tag_remote}" >> "$GITHUB_OUTPUT"
-          echo "cache_key_prefix=${cache_key_prefix}" >> "$GITHUB_OUTPUT"
-          echo "cache_key_primary=${cache_key_primary}" >> "$GITHUB_OUTPUT"
-          echo "cache_key_fallback=${cache_key_fallback}" >> "$GITHUB_OUTPUT"
+          {
+            echo "scope_started_at=${scope_started_at}"
+            echo "tag_remote=${tag_remote}"
+            echo "cache_key_prefix=${cache_key_prefix}"
+            echo "cache_key_primary=${cache_key_primary}"
+            echo "cache_key_fallback=${cache_key_fallback}"
+          } >> "$GITHUB_OUTPUT"
 
           cat > ./run-gradle-phase.sh <<'SH'
           #!/usr/bin/env bash
@@ -153,6 +155,19 @@ jobs:
           EOF
           }
 
+          configure_remote_cache_only() {
+            mkdir -p "${GRADLE_USER_HOME}/init.d"
+            cat > "${GRADLE_USER_HOME}/init.d/boringcache-local-cache-policy.gradle" <<EOF
+          gradle.settingsEvaluated { settings ->
+              settings.buildCache {
+                  local {
+                      enabled = false
+                  }
+              }
+          }
+          EOF
+          }
+
           enable_gradle_cache() {
             mkdir -p "${GRADLE_USER_HOME}"
             {
@@ -164,6 +179,8 @@ jobs:
           if [[ "${USE_REMOTE_CACHE:-0}" != "1" ]]; then
             configure_local_cache_only
             enable_gradle_cache
+          elif [[ "${GRADLE_LOCAL_BUILD_CACHE_POLICY:-default}" == "remote-only" ]]; then
+            configure_remote_cache_only
           fi
 
           cd upstream
@@ -505,6 +522,19 @@ jobs:
           EOF
           }
 
+          configure_remote_cache_only() {
+            mkdir -p "${GRADLE_USER_HOME}/init.d"
+            cat > "${GRADLE_USER_HOME}/init.d/boringcache-local-cache-policy.gradle" <<EOF
+          gradle.settingsEvaluated { settings ->
+              settings.buildCache {
+                  local {
+                      enabled = false
+                  }
+              }
+          }
+          EOF
+          }
+
           enable_gradle_cache() {
             mkdir -p "${GRADLE_USER_HOME}"
             {
@@ -516,6 +546,8 @@ jobs:
           if [[ "${USE_REMOTE_CACHE:-0}" != "1" ]]; then
             configure_local_cache_only
             enable_gradle_cache
+          elif [[ "${GRADLE_LOCAL_BUILD_CACHE_POLICY:-default}" == "remote-only" ]]; then
+            configure_remote_cache_only
           fi
 
           cd upstream
