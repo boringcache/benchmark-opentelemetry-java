@@ -40,7 +40,7 @@ jobs:
       strategy: boringcache
       cache_lane: fresh
       cli_version: ${{ inputs.cli_version }}
-      gradle_local_build_cache_policy: default
+      gradle_local_build_cache_policy: remote-only
       java_version: "21"
       build_command: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false -PapiBaseVersion=1.59.0
     secrets: inherit

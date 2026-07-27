@@ -124,11 +124,15 @@ jobs:
           fi
           tag_remote="${cache_scope}-gradle-remote"
 
-          echo "scope_started_at=${scope_started_at}" >> "$GITHUB_OUTPUT"
-          echo "tag_remote=${tag_remote}" >> "$GITHUB_OUTPUT"
-          echo "cache_key_prefix=${cache_key_prefix}" >> "$GITHUB_OUTPUT"
-          echo "cache_key_primary=${cache_key_primary}" >> "$GITHUB_OUTPUT"
-          echo "cache_key_fallback=${cache_key_fallback}" >> "$GITHUB_OUTPUT"
+          ./scripts/scope-boringcache-run.sh "$cache_scope"
+
+          {
+            echo "scope_started_at=${scope_started_at}"
+            echo "tag_remote=${tag_remote}"
+            echo "cache_key_prefix=${cache_key_prefix}"
+            echo "cache_key_primary=${cache_key_primary}"
+            echo "cache_key_fallback=${cache_key_fallback}"
+          } >> "$GITHUB_OUTPUT"
 
           cat > ./run-gradle-phase.sh <<'SH'
           #!/usr/bin/env bash
@@ -151,6 +155,19 @@ jobs:
           EOF
           }
 
+          configure_remote_cache_only() {
+            mkdir -p "${GRADLE_USER_HOME}/init.d"
+            cat > "${GRADLE_USER_HOME}/init.d/boringcache-local-cache-policy.gradle" <<EOF
+          gradle.settingsEvaluated { settings ->
+              settings.buildCache {
+                  local {
+                      enabled = false
+                  }
+              }
+          }
+          EOF
+          }
+
           enable_gradle_cache() {
             mkdir -p "${GRADLE_USER_HOME}"
             {
@@ -162,6 +179,8 @@ jobs:
           if [[ "${USE_REMOTE_CACHE:-0}" != "1" ]]; then
             configure_local_cache_only
             enable_gradle_cache
+          elif [[ "${GRADLE_LOCAL_BUILD_CACHE_POLICY:-default}" == "remote-only" ]]; then
+            configure_remote_cache_only
           fi
 
           cd upstream
@@ -181,21 +200,41 @@ jobs:
       - name: Configure boringcache/one
         if: inputs.strategy == 'boringcache'
         id: boringcache_one
-        uses: boringcache/one@9721d419d2c78c0780963d297eb3f81f24641a27
+        uses: boringcache/one@6b7033721b37075b2138fd0c769bf088e0836ce6 # v1.14.0
         with:
           setup: none
           cli-version: ${{ inputs.cli_version }}
           mode: gradle
+          trust-policy: publish
           working-directory: ./upstream
           gradle-home: ${{ github.workspace }}/.gradle-user-home
           cache-profiles: benchmark
-          save-on-pull-request: ${{ inputs.cache_lane == 'fresh' }}
           fail-on-cache-error: ${{ inputs.cache_lane == 'fresh' }}
           verbose: true
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+          BORINGCACHE_NO_GIT: "true"
           BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ env.BENCHMARK_ID }}-boringcache-build-observability.jsonl
+
+      - name: Verify fresh BoringCache tag starts empty
+        if: inputs.strategy == 'boringcache' && inputs.cache_lane == 'fresh'
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"
+          REMOTE_CACHE_TAG: ${{ steps.scope.outputs.tag_remote }}
+        run: |
+          set -euo pipefail
+          result="$(boringcache check "$BENCHMARK_WORKSPACE" "$REMOTE_CACHE_TAG" --no-git --no-platform --exact --json)"
+          jq '{workspace, total, hits, pending, misses, results: [.results[]? | {requested_tag, status, cache_type}]}' <<<"$result"
+          if ! jq -e --arg tag "$REMOTE_CACHE_TAG" '
+            (.results | length) == 1 and
+            .results[0].requested_tag == $tag and
+            .results[0].status != "hit"
+          ' <<<"$result" >/dev/null; then
+            echo "Fresh BoringCache tag was not empty before the cold build: ${REMOTE_CACHE_TAG}" >&2
+            exit 1
+          fi
 
       - name: Purge GitHub Actions cache keys
         if: inputs.strategy == 'actions-cache' && inputs.cache_lane != 'rolling'
@@ -313,6 +352,17 @@ jobs:
         env:
           GRADLE_PHASE: ${{ inputs.cache_lane == 'rolling' && 'commit' || 'cold' }}
         run: bash ./scripts/parse-gradle-task-outcome.sh benchmark-phase/cold-gradle.log "$GRADLE_PHASE"
+
+      - name: Record fresh cold Gradle cache outcome
+        if: inputs.strategy == 'boringcache' && inputs.cache_lane == 'fresh'
+        env:
+          GRADLE_FROM_CACHE_TASKS: ${{ steps.gradle_outcome.outputs.from_cache_tasks }}
+        run: |
+          set -euo pipefail
+          if [[ "${GRADLE_FROM_CACHE_TASKS:-0}" -ne 0 ]]; then
+            echo "Cold build reused ${GRADLE_FROM_CACHE_TASKS} task(s) populated earlier in this same build."
+            echo "The pre-build exact-tag gate verified that no prior remote cache entry existed."
+          fi
 
       - name: Capture BoringCache session summary
         if: inputs.strategy == 'boringcache' && always()
@@ -466,6 +516,8 @@ jobs:
           fi
           tag_remote="${cache_scope}-gradle-remote"
 
+          ./scripts/scope-boringcache-run.sh "$cache_scope"
+
           echo "tag_remote=${tag_remote}" >> "$GITHUB_OUTPUT"
 
           cat > ./run-gradle-phase.sh <<'SH'
@@ -489,6 +541,19 @@ jobs:
           EOF
           }
 
+          configure_remote_cache_only() {
+            mkdir -p "${GRADLE_USER_HOME}/init.d"
+            cat > "${GRADLE_USER_HOME}/init.d/boringcache-local-cache-policy.gradle" <<EOF
+          gradle.settingsEvaluated { settings ->
+              settings.buildCache {
+                  local {
+                      enabled = false
+                  }
+              }
+          }
+          EOF
+          }
+
           enable_gradle_cache() {
             mkdir -p "${GRADLE_USER_HOME}"
             {
@@ -500,6 +565,8 @@ jobs:
           if [[ "${USE_REMOTE_CACHE:-0}" != "1" ]]; then
             configure_local_cache_only
             enable_gradle_cache
+          elif [[ "${GRADLE_LOCAL_BUILD_CACHE_POLICY:-default}" == "remote-only" ]]; then
+            configure_remote_cache_only
           fi
 
           cd upstream
@@ -518,20 +585,20 @@ jobs:
 
       - name: Configure boringcache/one
         if: inputs.strategy == 'boringcache'
-        uses: boringcache/one@9721d419d2c78c0780963d297eb3f81f24641a27
+        uses: boringcache/one@6b7033721b37075b2138fd0c769bf088e0836ce6 # v1.14.0
         with:
           setup: none
           cli-version: ${{ inputs.cli_version }}
           mode: gradle
+          trust-policy: restore
           working-directory: ./upstream
           gradle-home: ${{ github.workspace }}/.gradle-user-home
-          read-only: true
-          save-on-pull-request: ${{ inputs.cache_lane == 'fresh' }}
           cache-profiles: benchmark
           fail-on-cache-miss: true
           verbose: true
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_NO_GIT: "true"
 
       - name: Verify dependency archive restored
         if: inputs.strategy == 'boringcache'
@@ -575,6 +642,16 @@ jobs:
           GRADLE_EXECUTED_WARN_THRESHOLD: 100
           GRADLE_EXECUTED_FAIL_THRESHOLD: ${{ vars.GRADLE_WARM_EXECUTED_FAIL_THRESHOLD || '' }}
         run: bash ./scripts/parse-gradle-task-outcome.sh benchmark-phase/warm1-gradle.log warm1
+
+      - name: Verify warm Gradle cache reuse
+        env:
+          GRADLE_FROM_CACHE_TASKS: ${{ steps.gradle_outcome.outputs.from_cache_tasks }}
+        run: |
+          set -euo pipefail
+          if [[ "${GRADLE_FROM_CACHE_TASKS:-0}" -lt 1 ]]; then
+            echo "Warm Gradle build produced zero native build-cache hits" >&2
+            exit 1
+          fi
 
       - name: Persist scenario timing artifact
         run: |
@@ -675,6 +752,7 @@ jobs:
         id: bc_cache_size
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_CHECK_STRICT: "1"
         run: |
           tags_csv="${{ needs.seed-cache.outputs.tags_csv }}"
           mkdir -p benchmark-storage
@@ -793,7 +871,7 @@ jobs:
             --storage-breakdown-json "${{ inputs.strategy == 'boringcache' && steps.bc_cache_size.outputs.breakdown_path || '' }}" \
             --tool-outcomes-json "${{ steps.tool_outcomes.outputs.path }}" \
             --cache-import-status "${{ needs.seed-cache.outputs.cache_import_status }}" \
-            --hit-behavior-note "${{ inputs.cache_lane == 'rolling' && 'Rolling lane: this run builds the current upstream commit as-is with the prior rolling cache available, exports the updated cache, and records that commit build only; warm follow-up runs are intentionally skipped.' || (inputs.strategy == 'boringcache' && 'Fresh lane: the cold build uses boringcache/one in mode=gradle with the Gradle HTTP remote cache identity from the committed repo plan. Warm restores dependency/tooling state on a fresh runner and rebuilds the same pinned source tree against the remote cache populated by the cold build in read-only mode. Gradle local build-cache policy is recorded in tool_outcomes.' || 'Fresh lane: the cold build runs from scratch with Gradle local build cache enabled and saves the Gradle user home to actions/cache under a run-scoped key. Warm restores that Gradle user home on a fresh runner and rebuilds the same pinned source tree without synthetic mutations. Gradle local build-cache policy is recorded in tool_outcomes.') }}" \
+            --hit-behavior-note "${{ inputs.cache_lane == 'rolling' && 'Rolling lane: this run builds the current upstream commit as-is with the prior rolling cache available, exports the updated cache, and records that commit build only; warm follow-up runs are intentionally skipped.' || (inputs.strategy == 'boringcache' && 'Fresh lane: the cold build uses boringcache/one in mode=gradle with trust-policy=publish and a run-scoped Gradle HTTP remote-cache identity from the committed repo plan. Warm uses trust-policy=restore on a fresh runner and rebuilds the same pinned source tree against the exact cache populated by the cold build. Gradle local build-cache policy is recorded in tool_outcomes.' || 'Fresh lane: the cold build runs from scratch with Gradle local build cache enabled and saves the Gradle user home to actions/cache under a run-scoped key. Warm restores that Gradle user home on a fresh runner and rebuilds the same pinned source tree without synthetic mutations. Gradle local build-cache policy is recorded in tool_outcomes.') }}" \
             "${cache_summary_args[@]}"
 
       - name: Upload benchmark artifacts
