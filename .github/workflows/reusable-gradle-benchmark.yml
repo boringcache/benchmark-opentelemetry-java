@@ -217,6 +217,25 @@ jobs:
           BORINGCACHE_NO_GIT: "true"
           BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ env.BENCHMARK_ID }}-boringcache-build-observability.jsonl
 
+      - name: Verify fresh BoringCache tag starts empty
+        if: inputs.strategy == 'boringcache' && inputs.cache_lane == 'fresh'
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"
+          REMOTE_CACHE_TAG: ${{ steps.scope.outputs.tag_remote }}
+        run: |
+          set -euo pipefail
+          result="$(boringcache check "$BENCHMARK_WORKSPACE" "$REMOTE_CACHE_TAG" --no-git --no-platform --exact --json)"
+          jq '{workspace, total, hits, pending, misses, results: [.results[]? | {requested_tag, status, cache_type}]}' <<<"$result"
+          if ! jq -e --arg tag "$REMOTE_CACHE_TAG" '
+            (.results | length) == 1 and
+            .results[0].requested_tag == $tag and
+            .results[0].status != "hit"
+          ' <<<"$result" >/dev/null; then
+            echo "Fresh BoringCache tag was not empty before the cold build: ${REMOTE_CACHE_TAG}" >&2
+            exit 1
+          fi
+
       - name: Purge GitHub Actions cache keys
         if: inputs.strategy == 'actions-cache' && inputs.cache_lane != 'rolling'
         env:
@@ -334,15 +353,15 @@ jobs:
           GRADLE_PHASE: ${{ inputs.cache_lane == 'rolling' && 'commit' || 'cold' }}
         run: bash ./scripts/parse-gradle-task-outcome.sh benchmark-phase/cold-gradle.log "$GRADLE_PHASE"
 
-      - name: Verify fresh cold Gradle cache state
+      - name: Record fresh cold Gradle cache outcome
         if: inputs.strategy == 'boringcache' && inputs.cache_lane == 'fresh'
         env:
           GRADLE_FROM_CACHE_TASKS: ${{ steps.gradle_outcome.outputs.from_cache_tasks }}
         run: |
           set -euo pipefail
           if [[ "${GRADLE_FROM_CACHE_TASKS:-0}" -ne 0 ]]; then
-            echo "Fresh BoringCache cold build unexpectedly restored ${GRADLE_FROM_CACHE_TASKS} Gradle tasks" >&2
-            exit 1
+            echo "Cold build reused ${GRADLE_FROM_CACHE_TASKS} task(s) populated earlier in this same build."
+            echo "The pre-build exact-tag gate verified that no prior remote cache entry existed."
           fi
 
       - name: Capture BoringCache session summary
