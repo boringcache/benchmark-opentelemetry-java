@@ -46,7 +46,7 @@ env:
   JAVA_VERSION: ${{ inputs.java_version }}
   BUILD_COMMAND: ${{ inputs.build_command }}
   GRADLE_LOCAL_BUILD_CACHE_POLICY: ${{ inputs.gradle_local_build_cache_policy }}
-  PROXY_PORT: "5000"
+  PROXY_PORT: "22243"
 
 jobs:
   seed-cache:
