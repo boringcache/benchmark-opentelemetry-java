@@ -5,24 +5,3 @@ tag = "otel-gradle-local"
 no-platform = true
 no-git = true
 command = ["./gradlew", "--no-daemon", "build", "-x", "test", "-Porg.gradle.java.installations.auto-download=false", "-PapiBaseVersion=1.59.0"]
-
-# The Gradle adapter owns build-output reuse. The benchmark profile archives
-# dependency/tool state only; the workflow disables Gradle's local build cache
-# in the BoringCache lane so the same build outputs are not stored twice.
-
-# Archive entry that complements the Gradle HTTP build-cache proxy.
-# The Gradle user home lives under the workspace (see workflow), so the
-# default_path here resolves relative to this file's directory (repo root)
-# to the same location.
-#
-# Gradle's remote HTTP build cache is the measured build-output surface.
-# The workflow strips local Gradle build-cache directories before the
-# archive save, so this entry carries dependency/tooling state without
-# duplicating the remote build cache.
-
-[entries.gradle-home]
-tag = "otel-gradle-home-local"
-default_path = ".gradle-user-home"
-
-[profiles.benchmark]
-entries = ["gradle-home"]

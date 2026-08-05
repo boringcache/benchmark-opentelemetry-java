@@ -10,16 +10,12 @@ if [[ ! "$scope" =~ ^[a-z0-9][a-z0-9._-]+$ ]]; then
 fi
 
 config_path="${repo_root}/.boringcache.toml"
-for mapping in \
-  "otel-gradle-local:${scope}-gradle-remote" \
-  "otel-gradle-home-local:${scope}-gradle-home"; do
-  old_tag="${mapping%%:*}"
-  new_tag="${mapping#*:}"
-  if ! grep -Fq "tag = \"${old_tag}\"" "$config_path"; then
-    echo "Missing expected local tag in ${config_path}: ${old_tag}" >&2
-    exit 1
-  fi
-  sed -i "s/tag = \"${old_tag}\"/tag = \"${new_tag}\"/" "$config_path"
-done
+old_tag="otel-gradle-local"
+new_tag="${scope}-gradle-remote"
+if ! grep -Fq "tag = \"${old_tag}\"" "$config_path"; then
+  echo "Missing expected local tag in ${config_path}: ${old_tag}" >&2
+  exit 1
+fi
+sed -i "s/tag = \"${old_tag}\"/tag = \"${new_tag}\"/" "$config_path"
 
-echo "Scoped BoringCache Gradle tags to ${scope}."
+echo "Scoped the BoringCache Gradle tag to ${scope}."

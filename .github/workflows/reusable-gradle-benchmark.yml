@@ -91,7 +91,7 @@ jobs:
         if: inputs.strategy == 'actions-cache'
         uses: actions/cache@v5
         with:
-          path: ${{ env.GRADLE_USER_HOME }}
+          path: ${{ env.GRADLE_USER_HOME }}/caches/build-cache-*
           key: ${{ steps.scope.outputs.cache_key }}
           restore-keys: |
             gradle-${{ steps.scope.outputs.cache_scope }}-
@@ -107,7 +107,6 @@ jobs:
           trust-policy: publish
           working-directory: upstream
           gradle-home: ${{ env.GRADLE_USER_HOME }}
-          cache-profiles: benchmark
           fail-on-cache-error: true
           metadata-hints: phase=${{ inputs.cache_lane == 'rolling' && 'rolling' || 'fresh-cold' }}
         env:
@@ -175,7 +174,7 @@ jobs:
         if: inputs.strategy == 'actions-cache'
         uses: actions/cache/restore@v5
         with:
-          path: ${{ env.GRADLE_USER_HOME }}
+          path: ${{ env.GRADLE_USER_HOME }}/caches/build-cache-*
           key: ${{ needs.publish.outputs.cache_key }}
           fail-on-cache-miss: true
 
@@ -190,7 +189,6 @@ jobs:
           trust-policy: restore
           working-directory: upstream
           gradle-home: ${{ env.GRADLE_USER_HOME }}
-          cache-profiles: benchmark
           fail-on-cache-miss: true
           fail-on-cache-error: true
           metadata-hints: phase=fresh-warm
