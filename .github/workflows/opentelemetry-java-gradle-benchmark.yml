@@ -30,12 +30,9 @@ jobs:
     uses: ./.github/workflows/reusable-gradle-benchmark.yml
     with:
       benchmark_id: otel-gradle
-      project_repo: open-telemetry/opentelemetry-java
       strategy: actions-cache
       cache_lane: ${{ github.event_name == 'pull_request' && 'fresh' || 'rolling' }}
-      gradle_local_build_cache_policy: default
       java_version: "21"
-      build_command: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false -PapiBaseVersion=1.59.0
     secrets: inherit
 
   boringcache:
@@ -43,10 +40,7 @@ jobs:
     uses: ./.github/workflows/reusable-gradle-benchmark.yml
     with:
       benchmark_id: otel-gradle
-      project_repo: open-telemetry/opentelemetry-java
       strategy: boringcache
       cache_lane: ${{ github.event_name == 'pull_request' && 'fresh' || 'rolling' }}
-      gradle_local_build_cache_policy: remote-only
       java_version: "21"
-      build_command: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false -PapiBaseVersion=1.59.0
     secrets: inherit

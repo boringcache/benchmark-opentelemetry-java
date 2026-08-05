@@ -4,6 +4,11 @@ workspace = "boringcache/benchmark-opentelemetry-java"
 tag = "otel-gradle-local"
 no-platform = true
 no-git = true
+command = ["./gradlew", "--no-daemon", "build", "-x", "test", "-Porg.gradle.java.installations.auto-download=false", "-PapiBaseVersion=1.59.0"]
+
+# The Gradle adapter owns build-output reuse. The benchmark profile archives
+# dependency/tool state only; the workflow disables Gradle's local build cache
+# in the BoringCache lane so the same build outputs are not stored twice.
 
 # Archive entry that complements the Gradle HTTP build-cache proxy.
 # The Gradle user home lives under the workspace (see workflow), so the

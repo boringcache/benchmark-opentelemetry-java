@@ -6,9 +6,6 @@ on:
       benchmark_id:
         required: true
         type: string
-      project_repo:
-        required: true
-        type: string
       strategy:
         required: true
         type: string
@@ -17,11 +14,7 @@ on:
         type: string
         default: fresh
       cli_version:
-        description: "Optional BoringCache CLI release tag for canary runs."
-        required: false
-        type: string
-        default: ""
-      benchmark_workspace:
+        description: "Optional exact BoringCache CLI release tag for canary runs."
         required: false
         type: string
         default: ""
@@ -29,859 +22,204 @@ on:
         required: false
         type: string
         default: "21"
-      build_command:
-        required: false
-        type: string
-        default: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false
-      gradle_local_build_cache_policy:
-        required: false
-        type: string
-        default: default
 
 env:
-  PROJECT_REPO: ${{ inputs.project_repo }}
   BENCHMARK_ID: ${{ inputs.benchmark_id }}
-  BENCHMARK_WORKSPACE: ${{ inputs.benchmark_workspace || github.repository }}
   CACHE_LANE: ${{ inputs.cache_lane }}
-  JAVA_VERSION: ${{ inputs.java_version }}
-  BUILD_COMMAND: ${{ inputs.build_command }}
-  GRADLE_LOCAL_BUILD_CACHE_POLICY: ${{ inputs.gradle_local_build_cache_policy }}
-  PROXY_PORT: "22243"
+  GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-user-home
 
 jobs:
-  seed-cache:
+  publish:
     name: ${{ inputs.cache_lane == 'rolling' && 'Commit' || 'Cold' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 240
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 180
     outputs:
-      cold_seconds: ${{ steps.cold_baseline_build.outputs.seconds }}
-      cold_build_seconds: ${{ steps.cold_baseline_build.outputs.build_seconds }}
-      scope_started_at: ${{ steps.scope.outputs.scope_started_at }}
-      tags_csv: ${{ steps.boringcache_one.outputs.resolved-tags }}
-      seed_cache_key: ${{ steps.seed_cache_key.outputs.key }}
-      cache_key_prefix: ${{ steps.scope.outputs.cache_key_prefix }}
-      cache_import_status: ${{ steps.cache_import_status.outputs.status }}
-      gradle_actionable_tasks: ${{ steps.gradle_outcome.outputs.actionable_tasks }}
-      gradle_executed_tasks: ${{ steps.gradle_outcome.outputs.executed_tasks }}
-      gradle_from_cache_tasks: ${{ steps.gradle_outcome.outputs.from_cache_tasks }}
-      gradle_up_to_date_tasks: ${{ steps.gradle_outcome.outputs.up_to_date_tasks }}
-      gradle_outcome_summary: ${{ steps.gradle_outcome.outputs.summary }}
-      gradle_outcome_warning: ${{ steps.gradle_outcome.outputs.warning }}
+      cache_key: ${{ steps.scope.outputs.cache_key }}
+      cache_scope: ${{ steps.scope.outputs.cache_scope }}
     steps:
-      - name: Validate BoringCache secrets
-        if: inputs.strategy == 'boringcache'
-        env:
-          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-          BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
+      - name: Validate benchmark strategy
         run: |
-          set -euo pipefail
-          [[ -n "${BORINGCACHE_RESTORE_TOKEN}" ]] || { echo "Missing BoringCache restore token" >&2; exit 1; }
-          [[ -n "${BORINGCACHE_SAVE_TOKEN}" ]] || { echo "Missing BoringCache save token" >&2; exit 1; }
+          case "${{ inputs.strategy }}" in
+            actions-cache|boringcache) ;;
+            *)
+              echo "Unsupported benchmark strategy: ${{ inputs.strategy }}" >&2
+              exit 1
+              ;;
+          esac
 
-      - name: Checkout benchmark repo
+      - name: Checkout benchmark repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
           submodules: false
 
-      - name: Checkout pinned upstream submodule shallowly
+      - name: Checkout pinned OpenTelemetry Java source
         run: |
-          set -euo pipefail
           git submodule sync --recursive
           git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
 
-      - name: Prepare base benchmark source tree
+      - name: Prepare clean OpenTelemetry Java source
         run: ./scripts/prepare-source.sh base
 
-      - name: Setup Java runtime
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-
-      - name: Prepare benchmark scope and helpers
+      - name: Select the cache cohort
         id: scope
         run: |
           set -euo pipefail
 
-          scope_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
           ref_slug="${ref_slug#-}"
           ref_slug="${ref_slug%-}"
           ref_slug="${ref_slug:-main}"
           if [[ "$CACHE_LANE" == "rolling" ]]; then
             cache_scope="${BENCHMARK_ID}-rolling-${ref_slug}"
-            cache_key_prefix="ac-${BENCHMARK_ID}-rolling-${ref_slug}"
-            cache_key_primary="${cache_key_prefix}-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}-build1"
-            cache_key_fallback="${cache_key_prefix}-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}-build2"
           else
             cache_scope="${BENCHMARK_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
-            cache_key_prefix="ac-${cache_scope}"
-            cache_key_primary="ac-${cache_scope}-build1"
-            cache_key_fallback="ac-${cache_scope}-build2"
           fi
-          tag_remote="${cache_scope}-gradle-remote"
 
           ./scripts/scope-boringcache-run.sh "$cache_scope"
+          source_sha="$(git rev-parse HEAD:upstream)"
+          echo "cache_scope=${cache_scope}" >> "$GITHUB_OUTPUT"
+          echo "cache_key=gradle-${cache_scope}-${source_sha}" >> "$GITHUB_OUTPUT"
 
-          {
-            echo "scope_started_at=${scope_started_at}"
-            echo "tag_remote=${tag_remote}"
-            echo "cache_key_prefix=${cache_key_prefix}"
-            echo "cache_key_primary=${cache_key_primary}"
-            echo "cache_key_fallback=${cache_key_fallback}"
-          } >> "$GITHUB_OUTPUT"
-
-          cat > ./run-gradle-phase.sh <<'SH'
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          mode="${1:-warm}"
-          configure_local_cache_only() {
-            mkdir -p "${GRADLE_USER_HOME}/init.d"
-            cat > "${GRADLE_USER_HOME}/init.d/boringcache-cache.gradle" <<EOF
-          gradle.settingsEvaluated { settings ->
-              settings.buildCache {
-                  local {
-                      enabled = true
-                  }
-                  remote(HttpBuildCache) {
-                      enabled = false
-                  }
-              }
-          }
-          EOF
-          }
-
-          configure_remote_cache_only() {
-            mkdir -p "${GRADLE_USER_HOME}/init.d"
-            cat > "${GRADLE_USER_HOME}/init.d/boringcache-local-cache-policy.gradle" <<EOF
-          gradle.settingsEvaluated { settings ->
-              settings.buildCache {
-                  local {
-                      enabled = false
-                  }
-              }
-          }
-          EOF
-          }
-
-          enable_gradle_cache() {
-            mkdir -p "${GRADLE_USER_HOME}"
-            {
-              echo "org.gradle.caching=true"
-              echo "org.gradle.daemon=false"
-            } >> "${GRADLE_USER_HOME}/gradle.properties"
-          }
-
-          if [[ "${USE_REMOTE_CACHE:-0}" != "1" ]]; then
-            configure_local_cache_only
-            enable_gradle_cache
-          elif [[ "${GRADLE_LOCAL_BUILD_CACHE_POLICY:-default}" == "remote-only" ]]; then
-            configure_remote_cache_only
-          fi
-
-          cd upstream
-          if [[ -n "${GRADLE_PHASE_LOG:-}" ]]; then
-            mkdir -p "$(dirname "$GRADLE_PHASE_LOG")"
-            eval "$BUILD_COMMAND" 2>&1 | tee "$GRADLE_PHASE_LOG"
-          else
-            eval "$BUILD_COMMAND"
-          fi
-          SH
-          chmod +x ./run-gradle-phase.sh
-
-      - name: Start build timing
-        id: seed_timing_start
-        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
-
-      - name: Configure boringcache/one
-        if: inputs.strategy == 'boringcache'
-        id: boringcache_one
-        uses: boringcache/one@bf810e34331db84f9f11930e83b8813b5ad31ba1 # v1.16.4
+      - name: Set up Java
+        uses: actions/setup-java@v5
         with:
-          setup: none
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
+
+      - name: Restore the GitHub Actions cache
+        if: inputs.strategy == 'actions-cache'
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.GRADLE_USER_HOME }}
+          key: ${{ steps.scope.outputs.cache_key }}
+          restore-keys: |
+            gradle-${{ steps.scope.outputs.cache_scope }}-
+
+      - name: Configure BoringCache One for the OpenTelemetry Java build
+        if: inputs.strategy == 'boringcache'
+        id: boringcache
+        uses: boringcache/one@09e053620cda4d3472f26a3ddd181144a108e2c2 # v1.16.8
+        with:
           cli-version: ${{ inputs.cli_version }}
+          setup: none
           mode: gradle
           trust-policy: publish
-          working-directory: ./upstream
-          gradle-home: ${{ github.workspace }}/.gradle-user-home
+          working-directory: upstream
+          gradle-home: ${{ env.GRADLE_USER_HOME }}
           cache-profiles: benchmark
-          fail-on-cache-error: ${{ inputs.cache_lane == 'fresh' }}
-          verbose: true
+          fail-on-cache-error: true
+          metadata-hints: phase=${{ inputs.cache_lane == 'rolling' && 'rolling' || 'fresh-cold' }}
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
           BORINGCACHE_NO_GIT: "true"
-          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ env.BENCHMARK_ID }}-boringcache-build-observability.jsonl
 
-      - name: Verify fresh BoringCache tag starts empty
-        if: inputs.strategy == 'boringcache' && inputs.cache_lane == 'fresh'
+      - name: Configure the Gradle cache policy
         env:
-          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-          BORINGCACHE_REQUIRE_SERVER_SIGNATURE: "1"
-          REMOTE_CACHE_TAG: ${{ steps.scope.outputs.tag_remote }}
+          CACHE_STRATEGY: ${{ inputs.strategy }}
+        run: ./scripts/configure-gradle-cache.sh "$CACHE_STRATEGY"
+
+      - name: Build OpenTelemetry Java
+        working-directory: upstream
+        env:
+          DISABLE_REMOTE_BUILD_CACHE: "true"
+        run: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false -PapiBaseVersion=1.59.0
+
+      - name: Verify the OpenTelemetry Java build
         run: |
           set -euo pipefail
-          result="$(boringcache check "$BENCHMARK_WORKSPACE" "$REMOTE_CACHE_TAG" --no-git --no-platform --exact --json)"
-          jq '{workspace, total, hits, pending, misses, results: [.results[]? | {requested_tag, status, cache_type}]}' <<<"$result"
-          if ! jq -e --arg tag "$REMOTE_CACHE_TAG" '
-            (.results | length) == 1 and
-            .results[0].requested_tag == $tag and
-            .results[0].status != "hit"
-          ' <<<"$result" >/dev/null; then
-            echo "Fresh BoringCache tag was not empty before the cold build: ${REMOTE_CACHE_TAG}" >&2
-            exit 1
-          fi
+          artifact="$(find upstream/sdk/all/build/libs -maxdepth 1 -type f -name 'opentelemetry-sdk-*.jar' -print -quit)"
+          test -n "$artifact"
+          test -s "$artifact"
 
-      - name: Purge GitHub Actions cache keys
-        if: inputs.strategy == 'actions-cache' && inputs.cache_lane != 'rolling'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          for key_prefix in "${{ steps.scope.outputs.cache_key_primary }}" "${{ steps.scope.outputs.cache_key_fallback }}"; do
-            page=1
-            while true; do
-              response="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100&page=${page}&key=${key_prefix}" 2>/dev/null || true)"
-              if [[ -z "$response" ]] || ! jq -e '.actions_caches | type == "array"' <<<"$response" >/dev/null 2>&1; then
-                break
-              fi
-              mapfile -t cache_ids < <(jq -r '.actions_caches[].id' <<<"$response")
-              for cache_id in "${cache_ids[@]}"; do
-                gh api -X DELETE "/repos/${GITHUB_REPOSITORY}/actions/caches/${cache_id}" >/dev/null 2>&1 || true
-              done
-              count="$(jq '.actions_caches | length' <<<"$response")"
-              if [[ "$count" -lt 100 ]]; then
-                break
-              fi
-              page=$((page + 1))
-            done
-          done
-
-      - name: Prepare GitHub Actions Cache write probe
-        if: inputs.strategy == 'actions-cache'
-        run: |
-          set -euo pipefail
-          mkdir -p .bench-cache-probe
-          printf '%s\n' "probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(date +%s)" > .bench-cache-probe/probe.txt
-
-      - name: Verify GitHub Actions Cache write access
-        if: inputs.strategy == 'actions-cache'
-        id: cache_write_probe
-        continue-on-error: true
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .bench-cache-probe
-          key: ac-${{ env.BENCHMARK_ID }}-write-probe-r${{ github.run_id }}-a${{ github.run_attempt }}
-
-      - name: Fail early if GitHub Actions Cache is read-only
-        if: inputs.strategy == 'actions-cache' && steps.cache_write_probe.outcome != 'success'
-        run: |
-          echo "GitHub Actions Cache write probe failed (likely read-only budget/spending cap)." >&2
-          echo "Cannot produce reliable GitHub Actions Cache benchmark results until cache writes are enabled." >&2
-          exit 1
-
-      - name: Restore rolling actions/cache history
-        if: inputs.strategy == 'actions-cache' && inputs.cache_lane == 'rolling'
-        id: restore_rolling_ac
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            ${{ github.workspace }}/.gradle-user-home
-          key: ${{ steps.scope.outputs.cache_key_primary }}
-          restore-keys: |
-            ${{ steps.scope.outputs.cache_key_prefix }}-
-
-      - name: Resolve rolling cache import status
-        id: cache_import_status
-        env:
-          RESTORE_CACHE_MATCHED_KEY: ${{ steps.restore_rolling_ac.outputs.cache-matched-key }}
-        run: |
-          set -euo pipefail
-          status=""
-          if [[ "$CACHE_LANE" == "rolling" && "${{ inputs.strategy }}" == "actions-cache" ]]; then
-            if [[ -n "$RESTORE_CACHE_MATCHED_KEY" ]]; then
-              status="ok"
-            else
-              status="actions_cache_miss"
-            fi
-          fi
-          echo "status=${status}" >> "$GITHUB_OUTPUT"
-
-      - name: ${{ inputs.cache_lane == 'rolling' && 'Run rolling commit build' || 'Run fresh cold build' }}
-        id: cold_baseline_build
-        env:
-          GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-user-home
-          GRADLE_PHASE_LOG: ${{ github.workspace }}/benchmark-phase/cold-gradle.log
-          USE_REMOTE_CACHE: ${{ inputs.strategy == 'boringcache' && '1' || '0' }}
-        run: |
-          set -euo pipefail
-          mkdir -p benchmark-phase
-          if [[ "${{ inputs.strategy }}" == "actions-cache" && "$CACHE_LANE" != "rolling" ]]; then
-            rm -rf "$GRADLE_USER_HOME"
-            mkdir -p "$GRADLE_USER_HOME"
-          else
-            mkdir -p "$GRADLE_USER_HOME"
-          fi
-
-          phase_start="${{ steps.seed_timing_start.outputs.started_at }}"
-          start="$(date +%s)"
-          ./run-gradle-phase.sh cold
-          rm -rf "$GRADLE_USER_HOME/daemon" "$GRADLE_USER_HOME/notifications"
-          strip_local_build_cache=0
-          if [[ "${{ inputs.strategy }}" == "boringcache" ]]; then
-            if [[ "$GRADLE_LOCAL_BUILD_CACHE_POLICY" != "preserve" ]]; then
-              strip_local_build_cache=1
-            fi
-          elif [[ "${{ inputs.strategy }}" == "actions-cache" && "$GRADLE_LOCAL_BUILD_CACHE_POLICY" == "strip" ]]; then
-            strip_local_build_cache=1
-          fi
-          if [[ "$strip_local_build_cache" == "1" ]]; then
-            find "$GRADLE_USER_HOME/caches" -maxdepth 1 -mindepth 1 -type d -name 'build-cache-*' -exec rm -rf {} + 2>/dev/null || true
-          fi
-          end="$(date +%s)"
-          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
-          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
-
-      - name: Parse Gradle build task outcome
-        id: gradle_outcome
-        env:
-          GRADLE_PHASE: ${{ inputs.cache_lane == 'rolling' && 'commit' || 'cold' }}
-        run: bash ./scripts/parse-gradle-task-outcome.sh benchmark-phase/cold-gradle.log "$GRADLE_PHASE"
-
-      - name: Record fresh cold Gradle cache outcome
-        if: inputs.strategy == 'boringcache' && inputs.cache_lane == 'fresh'
-        env:
-          GRADLE_FROM_CACHE_TASKS: ${{ steps.gradle_outcome.outputs.from_cache_tasks }}
-        run: |
-          set -euo pipefail
-          if [[ "${GRADLE_FROM_CACHE_TASKS:-0}" -ne 0 ]]; then
-            echo "Cold build reused ${GRADLE_FROM_CACHE_TASKS} task(s) populated earlier in this same build."
-            echo "The pre-build exact-tag gate verified that no prior remote cache entry existed."
-          fi
-
-      - name: Capture BoringCache session summary
-        if: inputs.strategy == 'boringcache' && always()
-        env:
-          BORINGCACHE_OBSERVABILITY_JSONL_PATH: ${{ runner.temp }}/${{ env.BENCHMARK_ID }}-boringcache-build-observability.jsonl
-        run: |
-          set -euo pipefail
-          mkdir -p benchmark-session-summary
-          if [[ -s "$BORINGCACHE_OBSERVABILITY_JSONL_PATH" ]]; then
-            jq -c 'select(.operation == "cache_session_summary") | .summary // .details // .' "$BORINGCACHE_OBSERVABILITY_JSONL_PATH" 2>/dev/null | tail -n 1 > benchmark-session-summary/benchmark-session-summary.json || true
-          fi
-          if [[ ! -s benchmark-session-summary/benchmark-session-summary.json ]]; then
-            rm -f benchmark-session-summary/benchmark-session-summary.json
-          fi
-
-      - name: Upload BoringCache session summary
-        if: inputs.strategy == 'boringcache' && always()
+      - name: Retain product evidence
+        if: inputs.strategy == 'boringcache'
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-session-summary-${{ env.BENCHMARK_ID }}-boringcache-${{ inputs.cache_lane }}
-          path: benchmark-session-summary/benchmark-session-summary.json
-          if-no-files-found: ignore
+          name: opentelemetry-java-gradle-${{ inputs.cache_lane }}-publish
+          path: ${{ steps.boringcache.outputs.evidence-path }}
+          if-no-files-found: error
 
-      - name: Freeze Gradle home for cache save
-        if: inputs.strategy == 'actions-cache' || inputs.strategy == 'boringcache'
-        env:
-          GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-user-home
-        run: |
-          set -euo pipefail
-
-          (cd upstream && ./gradlew --stop >/dev/null 2>&1 || true)
-          rm -rf "$GRADLE_USER_HOME/daemon" "$GRADLE_USER_HOME/notifications" "$GRADLE_USER_HOME/build-scan-data"
-
-          snapshot="${GRADLE_USER_HOME}.snapshot"
-          rm -rf "$snapshot"
-          mkdir -p "$snapshot"
-          rsync_status=0
-          rsync -a --delete --exclude 'build-scan-data/' "$GRADLE_USER_HOME"/ "$snapshot"/ || rsync_status=$?
-          if [[ "$rsync_status" == "24" ]]; then
-            echo "Gradle cache files changed during snapshot; continuing with the stable files rsync copied."
-          elif [[ "$rsync_status" != "0" ]]; then
-            exit "$rsync_status"
-          fi
-          rm -rf "$GRADLE_USER_HOME"
-          mv "$snapshot" "$GRADLE_USER_HOME"
-
-      - name: Save build cache (primary key)
-        if: inputs.strategy == 'actions-cache'
-        id: save_seed_primary
-        continue-on-error: true
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            ${{ github.workspace }}/.gradle-user-home
-          key: ${{ steps.scope.outputs.cache_key_primary }}
-
-      - name: Save build cache (fallback key)
-        if: inputs.strategy == 'actions-cache' && steps.save_seed_primary.outcome != 'success'
-        id: save_seed_fallback
-        continue-on-error: true
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            ${{ github.workspace }}/.gradle-user-home
-          key: ${{ steps.scope.outputs.cache_key_fallback }}
-
-      - name: Resolve build cache key
-        if: inputs.strategy == 'actions-cache'
-        id: seed_cache_key
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          primary="${{ steps.scope.outputs.cache_key_primary }}"
-          fallback="${{ steps.scope.outputs.cache_key_fallback }}"
-          key=""
-
-          for candidate in "$primary" "$fallback"; do
-            for _ in $(seq 1 30); do
-              response="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100&key=${candidate}" 2>/dev/null || true)"
-              if [[ -n "$response" ]] && jq -e '.actions_caches | type == "array"' <<<"$response" >/dev/null 2>&1; then
-                matches="$(jq '.actions_caches | length' <<<"$response")"
-                if [[ "$matches" -gt 0 ]]; then
-                  key="$candidate"
-                  break 2
-                fi
-              fi
-              sleep 2
-            done
-          done
-
-          if [[ -z "$key" ]]; then
-            echo "Failed to verify build cache key in GitHub Actions Cache API (likely cache save/read-only budget issue)." >&2
-            echo "Primary save outcome: ${{ steps.save_seed_primary.outcome }}" >&2
-            echo "Fallback save outcome: ${{ steps.save_seed_fallback.outcome }}" >&2
-            exit 1
-          fi
-
-          echo "key=${key}" >> "$GITHUB_OUTPUT"
-          echo "Using build cache key: ${key}"
-
-  scenario-builds:
+  restore:
     name: Warm
-    needs: seed-cache
-    if: ${{ inputs.cache_lane != 'rolling' }}
+    needs: publish
+    if: inputs.cache_lane == 'fresh'
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 180
     steps:
-      - name: Validate BoringCache restore secret
-        if: inputs.strategy == 'boringcache'
-        env:
-          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-        run: |
-          set -euo pipefail
-          [[ -n "${BORINGCACHE_RESTORE_TOKEN}" ]] || { echo "Missing BoringCache restore token" >&2; exit 1; }
-
-      - name: Checkout benchmark repo
+      - name: Checkout benchmark repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
           submodules: false
 
-      - name: Checkout pinned upstream submodule shallowly
+      - name: Checkout pinned OpenTelemetry Java source
         run: |
-          set -euo pipefail
           git submodule sync --recursive
           git -c protocol.version=2 submodule update --init --depth 1 --recommend-shallow --jobs 4 upstream
 
-      - name: Prepare scenario source tree
+      - name: Prepare clean OpenTelemetry Java source
         run: ./scripts/prepare-source.sh warm1
 
-      - name: Setup Java runtime
+      - name: Select the published cache cohort
+        run: ./scripts/scope-boringcache-run.sh "${{ needs.publish.outputs.cache_scope }}"
+
+      - name: Set up Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version: ${{ inputs.java_version }}
 
-      - name: Prepare benchmark scope and helpers
-        id: scope
-        run: |
-          set -euo pipefail
-
-          ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
-          ref_slug="${ref_slug#-}"
-          ref_slug="${ref_slug%-}"
-          ref_slug="${ref_slug:-main}"
-          if [[ "$CACHE_LANE" == "rolling" ]]; then
-            cache_scope="${BENCHMARK_ID}-rolling-${ref_slug}"
-          else
-            cache_scope="${BENCHMARK_ID}-run-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
-          fi
-          tag_remote="${cache_scope}-gradle-remote"
-
-          ./scripts/scope-boringcache-run.sh "$cache_scope"
-
-          echo "tag_remote=${tag_remote}" >> "$GITHUB_OUTPUT"
-
-          cat > ./run-gradle-phase.sh <<'SH'
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          mode="${1:-warm}"
-          configure_local_cache_only() {
-            mkdir -p "${GRADLE_USER_HOME}/init.d"
-            cat > "${GRADLE_USER_HOME}/init.d/boringcache-cache.gradle" <<EOF
-          gradle.settingsEvaluated { settings ->
-              settings.buildCache {
-                  local {
-                      enabled = true
-                  }
-                  remote(HttpBuildCache) {
-                      enabled = false
-                  }
-              }
-          }
-          EOF
-          }
-
-          configure_remote_cache_only() {
-            mkdir -p "${GRADLE_USER_HOME}/init.d"
-            cat > "${GRADLE_USER_HOME}/init.d/boringcache-local-cache-policy.gradle" <<EOF
-          gradle.settingsEvaluated { settings ->
-              settings.buildCache {
-                  local {
-                      enabled = false
-                  }
-              }
-          }
-          EOF
-          }
-
-          enable_gradle_cache() {
-            mkdir -p "${GRADLE_USER_HOME}"
-            {
-              echo "org.gradle.caching=true"
-              echo "org.gradle.daemon=false"
-            } >> "${GRADLE_USER_HOME}/gradle.properties"
-          }
-
-          if [[ "${USE_REMOTE_CACHE:-0}" != "1" ]]; then
-            configure_local_cache_only
-            enable_gradle_cache
-          elif [[ "${GRADLE_LOCAL_BUILD_CACHE_POLICY:-default}" == "remote-only" ]]; then
-            configure_remote_cache_only
-          fi
-
-          cd upstream
-          if [[ -n "${GRADLE_PHASE_LOG:-}" ]]; then
-            mkdir -p "$(dirname "$GRADLE_PHASE_LOG")"
-            eval "$BUILD_COMMAND" 2>&1 | tee "$GRADLE_PHASE_LOG"
-          else
-            eval "$BUILD_COMMAND"
-          fi
-          SH
-          chmod +x ./run-gradle-phase.sh
-
-      - name: Start scenario timing
-        id: scenario_timing_start
-        run: echo "started_at=$(date +%s)" >> "$GITHUB_OUTPUT"
-
-      - name: Configure boringcache/one
-        if: inputs.strategy == 'boringcache'
-        uses: boringcache/one@bf810e34331db84f9f11930e83b8813b5ad31ba1 # v1.16.4
+      - name: Restore the exact GitHub Actions cache
+        if: inputs.strategy == 'actions-cache'
+        uses: actions/cache/restore@v5
         with:
-          setup: none
+          path: ${{ env.GRADLE_USER_HOME }}
+          key: ${{ needs.publish.outputs.cache_key }}
+          fail-on-cache-miss: true
+
+      - name: Configure BoringCache One from the published cohort
+        if: inputs.strategy == 'boringcache'
+        id: boringcache
+        uses: boringcache/one@09e053620cda4d3472f26a3ddd181144a108e2c2 # v1.16.8
+        with:
           cli-version: ${{ inputs.cli_version }}
+          setup: none
           mode: gradle
           trust-policy: restore
-          working-directory: ./upstream
-          gradle-home: ${{ github.workspace }}/.gradle-user-home
+          working-directory: upstream
+          gradle-home: ${{ env.GRADLE_USER_HOME }}
           cache-profiles: benchmark
           fail-on-cache-miss: true
-          verbose: true
+          fail-on-cache-error: true
+          metadata-hints: phase=fresh-warm
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_NO_GIT: "true"
 
-      - name: Verify dependency archive restored
+      - name: Configure the Gradle cache policy
+        env:
+          CACHE_STRATEGY: ${{ inputs.strategy }}
+        run: ./scripts/configure-gradle-cache.sh "$CACHE_STRATEGY"
+
+      - name: Build OpenTelemetry Java
+        working-directory: upstream
+        env:
+          DISABLE_REMOTE_BUILD_CACHE: "true"
+        run: ./gradlew --no-daemon build -x test -Porg.gradle.java.installations.auto-download=false -PapiBaseVersion=1.59.0
+
+      - name: Verify the restored OpenTelemetry Java build
+        run: |
+          set -euo pipefail
+          artifact="$(find upstream/sdk/all/build/libs -maxdepth 1 -type f -name 'opentelemetry-sdk-*.jar' -print -quit)"
+          test -n "$artifact"
+          test -s "$artifact"
+
+      - name: Retain product evidence
         if: inputs.strategy == 'boringcache'
-        run: |
-          set -euo pipefail
-          gradle_home="${{ github.workspace }}/.gradle-user-home"
-          if [[ ! -d "$gradle_home" ]] || [[ -z "$(ls -A "$gradle_home" 2>/dev/null)" ]]; then
-            echo "Missing or empty $gradle_home after BoringCache restore" >&2
-            exit 1
-          fi
-
-      - name: Restore cache from fresh cold build
-        if: inputs.strategy == 'actions-cache'
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            ${{ github.workspace }}/.gradle-user-home
-          key: ${{ needs.seed-cache.outputs.seed_cache_key }}
-          fail-on-cache-miss: true
-
-      - name: Run scenario build
-        id: phase_build
-        env:
-          GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-user-home
-          GRADLE_PHASE_LOG: ${{ github.workspace }}/benchmark-phase/warm1-gradle.log
-          GRADLE_EXECUTED_WARN_THRESHOLD: 100
-          USE_REMOTE_CACHE: ${{ inputs.strategy == 'boringcache' && '1' || '0' }}
-        run: |
-          set -euo pipefail
-          mkdir -p benchmark-phase
-          phase_start="${{ steps.scenario_timing_start.outputs.started_at }}"
-          start="$(date +%s)"
-          ./run-gradle-phase.sh warm
-          end="$(date +%s)"
-          echo "seconds=$((end - phase_start))" >> "$GITHUB_OUTPUT"
-          echo "build_seconds=$((end - start))" >> "$GITHUB_OUTPUT"
-
-      - name: Parse Gradle warm task outcome
-        id: gradle_outcome
-        env:
-          GRADLE_EXECUTED_WARN_THRESHOLD: 100
-          GRADLE_EXECUTED_FAIL_THRESHOLD: ${{ vars.GRADLE_WARM_EXECUTED_FAIL_THRESHOLD || '' }}
-        run: bash ./scripts/parse-gradle-task-outcome.sh benchmark-phase/warm1-gradle.log warm1
-
-      - name: Verify warm Gradle cache reuse
-        env:
-          GRADLE_FROM_CACHE_TASKS: ${{ steps.gradle_outcome.outputs.from_cache_tasks }}
-        run: |
-          set -euo pipefail
-          if [[ "${GRADLE_FROM_CACHE_TASKS:-0}" -lt 1 ]]; then
-            echo "Warm Gradle build produced zero native build-cache hits" >&2
-            exit 1
-          fi
-
-      - name: Persist scenario timing artifact
-        run: |
-          set -euo pipefail
-          mkdir -p benchmark-phase
-          cat > "benchmark-phase/warm1.env" <<EOF
-          phase=warm1
-          seconds=${{ steps.phase_build.outputs.seconds }}
-          build_seconds=${{ steps.phase_build.outputs.build_seconds }}
-          gradle_actionable_tasks=${{ steps.gradle_outcome.outputs.actionable_tasks }}
-          gradle_executed_tasks=${{ steps.gradle_outcome.outputs.executed_tasks }}
-          gradle_from_cache_tasks=${{ steps.gradle_outcome.outputs.from_cache_tasks }}
-          gradle_up_to_date_tasks=${{ steps.gradle_outcome.outputs.up_to_date_tasks }}
-          gradle_outcome_summary=${{ steps.gradle_outcome.outputs.summary }}
-          gradle_outcome_warning=${{ steps.gradle_outcome.outputs.warning }}
-          EOF
-
-      - name: Upload scenario timing artifact
         uses: actions/upload-artifact@v6
         with:
-          name: benchmark-phase-${{ env.BENCHMARK_ID }}-${{ inputs.strategy }}-warm
-          path: benchmark-phase/warm1.env
+          name: opentelemetry-java-gradle-fresh-restore
+          path: ${{ steps.boringcache.outputs.evidence-path }}
           if-no-files-found: error
-
-  finalize-benchmark:
-    name: Report
-    needs: [seed-cache, scenario-builds]
-    if: ${{ always() && needs.seed-cache.result == 'success' && (needs.scenario-builds.result == 'success' || needs.scenario-builds.result == 'skipped') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - name: Checkout benchmark repo
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          submodules: false
-
-      - name: Install BoringCache CLI
-        if: inputs.strategy == 'boringcache'
-        run: >-
-          ./scripts/install-boringcache-cli.sh
-          "${{ inputs.cli_version }}"
-          "linux-amd64"
-      - name: Download scenario timing artifacts
-        if: ${{ inputs.cache_lane != 'rolling' }}
-        uses: actions/download-artifact@v8
-        with:
-          pattern: benchmark-phase-${{ env.BENCHMARK_ID }}-${{ inputs.strategy }}-*
-          path: benchmark-phase
-          merge-multiple: true
-
-      - name: Download BoringCache session summary
-        if: inputs.strategy == 'boringcache'
-        uses: actions/download-artifact@v8
-        continue-on-error: true
-        with:
-          name: benchmark-session-summary-${{ env.BENCHMARK_ID }}-boringcache-${{ inputs.cache_lane }}
-          path: benchmark-session-summary
-
-      - name: Collect scenario timings
-        if: ${{ inputs.cache_lane != 'rolling' }}
-        id: timings
-        run: |
-          set -euo pipefail
-          parse_phase() {
-            local phase="$1"
-            local file="benchmark-phase/${phase}.env"
-            if [[ ! -f "$file" ]]; then
-              echo "Missing timing artifact for phase ${phase}" >&2
-              ls -R benchmark-phase || true
-              exit 1
-            fi
-            local seconds
-            seconds="$(grep "^seconds=" "$file" | head -n1 | cut -d= -f2-)"
-            if [[ -z "${seconds}" ]]; then
-              echo "Timing artifact for phase ${phase} has empty seconds" >&2
-              cat "$file" >&2
-              exit 1
-            fi
-            local key="${phase//-/_}"
-            echo "${key}_seconds=${seconds}" >> "$GITHUB_OUTPUT"
-            local build_seconds
-            build_seconds="$(grep "^build_seconds=" "$file" | head -n1 | cut -d= -f2- || true)"
-            if [[ -n "${build_seconds}" ]]; then
-              echo "${key}_build_seconds=${build_seconds}" >> "$GITHUB_OUTPUT"
-            fi
-            for field in gradle_actionable_tasks gradle_executed_tasks gradle_from_cache_tasks gradle_up_to_date_tasks gradle_outcome_summary gradle_outcome_warning; do
-              value="$(grep "^${field}=" "$file" | head -n1 | cut -d= -f2- || true)"
-              if [[ -n "${value}" ]]; then
-                echo "${key}_${field}=${value}" >> "$GITHUB_OUTPUT"
-              fi
-            done
-          }
-          parse_phase warm1
-
-      - name: Measure BoringCache storage usage
-        if: inputs.strategy == 'boringcache'
-        id: bc_cache_size
-        env:
-          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-          BORINGCACHE_CHECK_STRICT: "1"
-        run: |
-          tags_csv="${{ needs.seed-cache.outputs.tags_csv }}"
-          mkdir -p benchmark-storage
-          breakdown_path="benchmark-storage/boringcache-storage-breakdown.json"
-          bytes="$(BORINGCACHE_STORAGE_BREAKDOWN_PATH="$breakdown_path" ./scripts/sum-boringcache-check-sizes.sh "$BENCHMARK_WORKSPACE" "$tags_csv")"
-          echo "bytes=${bytes}" >> "$GITHUB_OUTPUT"
-          echo "breakdown_path=${breakdown_path}" >> "$GITHUB_OUTPUT"
-
-      - name: Measure GitHub Actions Cache storage usage
-        if: inputs.strategy == 'actions-cache'
-        id: ac_cache_size
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          args=("${{ inputs.cache_lane == 'rolling' && needs.seed-cache.outputs.cache_key_prefix || needs.seed-cache.outputs.seed_cache_key }}")
-          if [[ -n "${{ inputs.cache_lane == 'rolling' && '' || needs.seed-cache.outputs.scope_started_at }}" ]]; then
-            args+=("${{ inputs.cache_lane == 'rolling' && '' || needs.seed-cache.outputs.scope_started_at }}")
-          fi
-          bytes="$(./scripts/sum-gha-cache-by-key.sh "${args[@]}")"
-          echo "bytes=${bytes}" >> "$GITHUB_OUTPUT"
-
-      - name: Capture committed upstream ref
-        id: upstream_ref
-        run: echo "sha=$(git rev-parse HEAD:upstream)" >> "$GITHUB_OUTPUT"
-
-      - name: Write tool outcome diagnostics
-        id: tool_outcomes
-        env:
-          SEED_PHASE: ${{ inputs.cache_lane == 'rolling' && 'commit' || 'cold' }}
-          LOCAL_BUILD_CACHE_POLICY: ${{ inputs.gradle_local_build_cache_policy }}
-          SEED_ACTIONABLE_TASKS: ${{ needs.seed-cache.outputs.gradle_actionable_tasks }}
-          SEED_EXECUTED_TASKS: ${{ needs.seed-cache.outputs.gradle_executed_tasks }}
-          SEED_FROM_CACHE_TASKS: ${{ needs.seed-cache.outputs.gradle_from_cache_tasks }}
-          SEED_UP_TO_DATE_TASKS: ${{ needs.seed-cache.outputs.gradle_up_to_date_tasks }}
-          SEED_OUTCOME_SUMMARY: ${{ needs.seed-cache.outputs.gradle_outcome_summary }}
-          SEED_OUTCOME_WARNING: ${{ needs.seed-cache.outputs.gradle_outcome_warning }}
-          WARM_ACTIONABLE_TASKS: ${{ steps.timings.outputs.warm1_gradle_actionable_tasks }}
-          WARM_EXECUTED_TASKS: ${{ steps.timings.outputs.warm1_gradle_executed_tasks }}
-          WARM_FROM_CACHE_TASKS: ${{ steps.timings.outputs.warm1_gradle_from_cache_tasks }}
-          WARM_UP_TO_DATE_TASKS: ${{ steps.timings.outputs.warm1_gradle_up_to_date_tasks }}
-          WARM_OUTCOME_SUMMARY: ${{ steps.timings.outputs.warm1_gradle_outcome_summary }}
-          WARM_OUTCOME_WARNING: ${{ steps.timings.outputs.warm1_gradle_outcome_warning }}
-        run: |
-          set -euo pipefail
-          mkdir -p benchmark-results
-
-          num_or_null() {
-            if [[ "$1" =~ ^[0-9]+$ ]]; then
-              printf '%s' "$1"
-            else
-              printf 'null'
-            fi
-          }
-
-          json_string_or_null() {
-            if [[ -z "$1" ]]; then
-              printf 'null'
-            else
-              jq -Rn --arg value "$1" '$value'
-            fi
-          }
-
-          warnings_json="$(
-            printf '%s\n%s\n' "$SEED_OUTCOME_WARNING" "$WARM_OUTCOME_WARNING" |
-              jq -R -s 'split("\n") | map(select(length > 0)) | unique'
-          )"
-
-          cat > benchmark-results/tool-outcomes.json <<JSON
-          {
-            "gradle": {
-              "local_build_cache_policy": $(json_string_or_null "$LOCAL_BUILD_CACHE_POLICY"),
-              "${SEED_PHASE}": {
-                "summary": $(json_string_or_null "$SEED_OUTCOME_SUMMARY"),
-                "actionable_tasks": $(num_or_null "$SEED_ACTIONABLE_TASKS"),
-                "executed_tasks": $(num_or_null "$SEED_EXECUTED_TASKS"),
-                "from_cache_tasks": $(num_or_null "$SEED_FROM_CACHE_TASKS"),
-                "up_to_date_tasks": $(num_or_null "$SEED_UP_TO_DATE_TASKS")
-              },
-              "warm1": {
-                "summary": $(json_string_or_null "$WARM_OUTCOME_SUMMARY"),
-                "actionable_tasks": $(num_or_null "$WARM_ACTIONABLE_TASKS"),
-                "executed_tasks": $(num_or_null "$WARM_EXECUTED_TASKS"),
-                "from_cache_tasks": $(num_or_null "$WARM_FROM_CACHE_TASKS"),
-                "up_to_date_tasks": $(num_or_null "$WARM_UP_TO_DATE_TASKS")
-              }
-            },
-            "warnings": ${warnings_json}
-          }
-          JSON
-
-          jq -c '.' benchmark-results/tool-outcomes.json >/dev/null
-          echo "path=benchmark-results/tool-outcomes.json" >> "$GITHUB_OUTPUT"
-
-      - name: Write benchmark artifacts
-        id: artifact_files
-        env:
-          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-        run: |
-          cache_summary_args=()
-          if [[ -s benchmark-session-summary/benchmark-session-summary.json ]]; then
-            cache_summary_args=(--cache-session-summary-json benchmark-session-summary/benchmark-session-summary.json)
-          fi
-
-          ./scripts/write-benchmark-artifacts.sh \
-            --benchmark "$BENCHMARK_ID" \
-            --strategy "${{ inputs.strategy }}" \
-            --lane "$CACHE_LANE" \
-            --project-repo "$PROJECT_REPO" \
-            --project-ref "${{ steps.upstream_ref.outputs.sha }}" \
-            --cold-seconds "${{ needs.seed-cache.outputs.cold_seconds }}" \
-            --cold-build-seconds "${{ needs.seed-cache.outputs.cold_build_seconds }}" \
-            --warm1-seconds "${{ inputs.cache_lane == 'rolling' && '' || steps.timings.outputs.warm1_seconds }}" \
-            --warm1-build-seconds "${{ inputs.cache_lane == 'rolling' && '' || steps.timings.outputs.warm1_build_seconds }}" \
-            --cache-storage-bytes "${{ inputs.strategy == 'boringcache' && steps.bc_cache_size.outputs.bytes || steps.ac_cache_size.outputs.bytes }}" \
-            --cache-storage-source "${{ inputs.strategy == 'boringcache' && 'boringcache-check' || 'github-actions-cache-api' }}" \
-            --storage-breakdown-json "${{ inputs.strategy == 'boringcache' && steps.bc_cache_size.outputs.breakdown_path || '' }}" \
-            --tool-outcomes-json "${{ steps.tool_outcomes.outputs.path }}" \
-            --cache-import-status "${{ needs.seed-cache.outputs.cache_import_status }}" \
-            --hit-behavior-note "${{ inputs.cache_lane == 'rolling' && 'Rolling lane: this run builds the current upstream commit as-is with the prior rolling cache available, exports the updated cache, and records that commit build only; warm follow-up runs are intentionally skipped.' || (inputs.strategy == 'boringcache' && 'Fresh lane: the cold build uses boringcache/one in mode=gradle with trust-policy=publish and a run-scoped Gradle HTTP remote-cache identity from the committed repo plan. Warm uses trust-policy=restore on a fresh runner and rebuilds the same pinned source tree against the exact cache populated by the cold build. Gradle local build-cache policy is recorded in tool_outcomes.' || 'Fresh lane: the cold build runs from scratch with Gradle local build cache enabled and saves the Gradle user home to actions/cache under a run-scoped key. Warm restores that Gradle user home on a fresh runner and rebuilds the same pinned source tree without synthetic mutations. Gradle local build-cache policy is recorded in tool_outcomes.') }}" \
-            "${cache_summary_args[@]}"
-
-      - name: Upload benchmark artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: benchmark-${{ env.BENCHMARK_ID }}-${{ inputs.strategy }}-${{ env.CACHE_LANE }}
-          path: |
-            ${{ steps.artifact_files.outputs.json_path }}
-            ${{ steps.artifact_files.outputs.md_path }}
-          if-no-files-found: error
-
-      - name: Publish summary
-        run: cat "${{ steps.artifact_files.outputs.md_path }}" >> "$GITHUB_STEP_SUMMARY"
