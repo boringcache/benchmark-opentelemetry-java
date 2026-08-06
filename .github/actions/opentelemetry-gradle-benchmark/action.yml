@@ -8,6 +8,8 @@ inputs:
     required: true
   phase:
     required: true
+  benchmark_id:
+    required: true
   cli_version:
     required: false
     default: ""
@@ -85,7 +87,7 @@ runs:
         working-directory: upstream
         gradle-home: ${{ github.workspace }}/.gradle-user-home
         fail-on-cache-error: true
-        metadata-hints: phase=${{ inputs.cache_lane == 'rolling' && 'rolling' || 'fresh-cold' }}
+        metadata-hints: benchmark=${{ inputs.benchmark_id }},phase=${{ inputs.cache_lane == 'rolling' && 'rolling' || 'fresh-cold' }}
 
     - name: Restore with BoringCache
       id: boringcache-restore
@@ -100,7 +102,7 @@ runs:
         gradle-home: ${{ github.workspace }}/.gradle-user-home
         fail-on-cache-miss: true
         fail-on-cache-error: true
-        metadata-hints: phase=fresh-warm
+        metadata-hints: benchmark=${{ inputs.benchmark_id }},phase=fresh-warm
 
     - name: Configure the Gradle cache policy
       shell: bash
@@ -129,7 +131,7 @@ runs:
       if: inputs.strategy == 'boringcache' && inputs.phase == 'publish'
       uses: actions/upload-artifact@v6
       with:
-        name: opentelemetry-java-gradle-${{ inputs.cache_lane }}-publish
+        name: ${{ inputs.benchmark_id }}-${{ inputs.cache_lane }}-publish
         path: ${{ steps.boringcache-publish.outputs.evidence-path }}
         if-no-files-found: error
 
@@ -137,6 +139,6 @@ runs:
       if: inputs.strategy == 'boringcache' && inputs.phase == 'warm'
       uses: actions/upload-artifact@v6
       with:
-        name: opentelemetry-java-gradle-fresh-restore
+        name: ${{ inputs.benchmark_id }}-fresh-restore
         path: ${{ steps.boringcache-restore.outputs.evidence-path }}
         if-no-files-found: error
