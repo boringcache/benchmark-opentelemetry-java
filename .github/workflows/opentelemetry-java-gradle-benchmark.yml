@@ -68,7 +68,6 @@ jobs:
       - name: Publish the OpenTelemetry Java Gradle benchmark report
         run: |
           python3 ./scripts/benchmark-report.py summarize \
-            --benchmark "$BENCHMARK_ID" \
             --title "OpenTelemetry Java Gradle rolling benchmark" \
             --input-dir phase-evidence \
             --output-dir benchmark-results
