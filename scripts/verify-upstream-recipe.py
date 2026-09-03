@@ -25,7 +25,7 @@ def main() -> int:
         plan = tomllib.loads((ROOT / ".boringcache.toml").read_text())
         require(plan["adapters"]["gradle"]["command"] == EXPECTED, "Gradle plan changed")
         upstream = (ROOT / "upstream/.github/workflows/build.yml").read_text()
-        for fragment in ("test-java-version:", "distribution: zulu", "distribution: temurin", "java-version: 21", "./gradlew build", "-PtestJavaVersion=${{ matrix.test-java-version }}", "-Porg.gradle.java.installations.paths=${{ steps.setup-java-test.outputs.path }}", "-Porg.gradle.java.installations.auto-download=false"):
+        for fragment in ("test-java-version:", "distribution: zulu", "distribution: temurin", "java-version: 21", "./gradlew build", "-PtestJavaVersion=${{ matrix.test-java-version }}", '"-Porg.gradle.java.installations.paths=${TEST_JAVA_PATH}"', "TEST_JAVA_PATH: ${{ steps.setup-java-test.outputs.path }}", "-Porg.gradle.java.installations.auto-download=false"):
             require(fragment in upstream, f"upstream Gradle job changed: {fragment}")
         action = (ROOT / ".github/actions/opentelemetry-gradle-benchmark/action.yml").read_text()
         require("run-benchmark-plan.py gradle --working-directory upstream" in action, "workflow bypasses the plan")
