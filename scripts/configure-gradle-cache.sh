@@ -27,15 +27,13 @@ GRADLE
     } >> "${gradle_home}/gradle.properties"
     ;;
   boringcache)
-    cat > "${gradle_home}/init.d/benchmark-cache-policy.gradle" <<'GRADLE'
-gradle.settingsEvaluated { settings ->
-    settings.buildCache {
-        local {
-            enabled = false
-        }
-    }
-}
-GRADLE
+    # The BoringCache action owns the remote Gradle build-cache init script.
+    # Keep it intact so the following Gradle command uses the action's proxy.
+    cache_init="${gradle_home}/init.d/boringcache-gradle-build-cache.init.gradle"
+    if [[ ! -s "$cache_init" ]]; then
+      echo "BoringCache did not install its Gradle build-cache init script in ${gradle_home}." >&2
+      exit 1
+    fi
     ;;
   *)
     echo "Unsupported Gradle cache strategy: ${strategy:-<empty>}" >&2

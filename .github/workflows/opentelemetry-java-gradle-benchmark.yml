@@ -28,6 +28,7 @@ env:
   BORINGCACHE_SAVE_TOKEN: ${{ secrets.BORINGCACHE_SAVE_TOKEN }}
   BORINGCACHE_NO_GIT: "true"
   BENCHMARK_ID: otel-gradle
+  GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-user-home
 
 jobs:
   publish:
